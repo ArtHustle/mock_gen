@@ -67,20 +67,6 @@ func diffStrings(a, b string) (string, bool) {
 	return diff.String(), false
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 type matchStringMatcher struct {
 	expected string
 }

@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"bitbucket.org/arthustle/backend/tools/mock_gen"
+	mock_gen "github.com/ArtHustle/moc_gen"
 )
 
 func determineOutputFile(inputFilePath string) string {

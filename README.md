@@ -36,7 +36,7 @@ It will produce the following mock:
 ```go
 package test
 
-import "bitbucket.org/arthustle/backend/internal/service/product/model"
+import "your/project/internal/service/product/model"
 
 type ServiceMock struct {
 	GetProductByID_calls           int
@@ -68,7 +68,7 @@ package test
 import (
 	"sync"
 	
-	"bitbucket.org/arthustle/backend/internal/service/product/model"
+	"your/project/internal/service/product/model"
 )
 
 type ServiceMock struct {
@@ -89,5 +89,3 @@ func (this *ServiceMock) GetProductByID(param1 context.Context, param2 model.Pro
 	return this.GetProductByID_return_product
 }
 ```
-
-[Top](../../../README.md) | [Backend](../../README.md) | [Frontend](../../../frontend/README.md) 
