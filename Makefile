@@ -1,3 +1,3 @@
 .PHONY: install
 install:
-	go install ./cmd/main.go 
+	go install ./cmd/mock_gen
