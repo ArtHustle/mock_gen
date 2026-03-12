@@ -37,6 +37,7 @@ func storeToFile(filePath, content string) {
 
 func main() {
 	var outputFile string
+	var templateFile string
 	var generateReturnHandler bool
 	var threadSafe bool
 	var noHeaderNote bool
@@ -48,10 +49,21 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			inputFilePath := args[0]
 
+			var customTemplate string
+			if templateFile != "" {
+				tmplBytes, err := os.ReadFile(templateFile)
+				if err != nil {
+					fmt.Println("Failed to read template file:", err)
+					os.Exit(1)
+				}
+				customTemplate = string(tmplBytes)
+			}
+
 			mockContent, e := mock_gen.GenerateMockFileWithOptions(inputFilePath, mock_gen.Options{
 				GenerateReturnHandler: generateReturnHandler,
 				MakeThreadSafe:        threadSafe,
-				AddHeaderNote:         !noHeaderNote, // Invert the flag - by default add header
+				AddHeaderNote:         !noHeaderNote,
+				CustomTemplate:        customTemplate,
 			})
 			if e != nil {
 				fmt.Println("Failed to generate mock content:", e)
@@ -66,6 +78,12 @@ func main() {
 	}
 
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path (optional)")
+	rootCmd.Flags().StringVarP(&templateFile, "template", "t", "",
+		"Path to a custom Go text/template file (.tmpl) for code generation. "+
+			"The template receives a MockData struct with parsed interface information "+
+			"(imports, interface names, methods, params, returns, signatures). "+
+			"Output is run through gofmt, so it must produce valid Go. "+
+			"Use mock_gen.DefaultTemplate() programmatically to get the built-in template as a starting point.")
 	rootCmd.Flags().BoolVar(&generateReturnHandler, "generate-return-handler", false,
 		"If set, generates a single return handler field (e.g., Method_return func(...)), and ignores other return value fields. If the handler is provided, other return values (like Method_return_error) will be ignored.")
 	rootCmd.Flags().BoolVar(&threadSafe, "thread-safe", false,

@@ -1,0 +1,49 @@
+{{.HeaderNote}}package test
+
+{{if or .Imports.StdImports .Imports.NonStdImports}}import (
+{{range .Imports.StdImports}}	{{.}}
+{{end}}{{if and .Imports.StdImports .Imports.NonStdImports}}
+{{end}}{{range .Imports.NonStdImports}}	{{.}}
+{{end}})
+
+{{end}}{{range $iface := .Interfaces}}type {{$iface.MockName}} struct {
+{{- if $.Options.MakeThreadSafe}}
+	mu sync.Mutex
+{{end}}{{range $iface.Methods}}
+	{{.CallsField}} int
+{{range .Params}}	{{.Name}} {{.Type}}
+{{end}}{{if .ReturnHandler}}	{{.ReturnHandler.FieldName}} func({{.ReturnHandler.ParamTypes}}) ({{.ReturnHandler.ReturnTypes}})
+{{end}}{{range .Returns}}	{{.Name}} {{.Type}}
+{{end}}{{end}}}
+
+{{range $method := $iface.Methods}}func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
+{{- if $.Options.MakeThreadSafe}}
+	this.mu.Lock()
+	defer this.mu.Unlock()
+{{end}}	this.{{$method.CallsField}}++
+{{range $i, $param := $method.Params}}	this.{{$param.Name}} = {{index $method.Signature.ParamNames $i}}
+{{end}}{{if $method.ReturnHandler}}	if this.{{$method.ReturnHandler.FieldName}} != nil {
+		return this.{{$method.ReturnHandler.FieldName}}({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
+	}
+{{end}}{{if $method.Returns}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}{{$rf}}{{end}}
+{{end}}}
+
+{{if $method.Getters}}func (this *{{$iface.MockName}}) {{$method.Name}}_calls() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.{{$method.Getters.CallsGetter.FieldName}}
+}
+
+{{range $method.Getters.ParamGetters}}func (this *{{$iface.MockName}}) {{.MethodName}}() {{.ReturnType}} {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.{{.FieldName}}
+}
+
+{{end}}{{range $method.Getters.ReturnSetters}}func (this *{{$iface.MockName}}) {{.MethodName}}(value {{.ParamType}}) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.{{.FieldName}} = value
+}
+
+{{end}}{{end}}{{end}}{{end}}
