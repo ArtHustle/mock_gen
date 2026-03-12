@@ -1,11 +1,11 @@
 package test
 
 import (
-	"html/template"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1145,6 +1145,84 @@ func (this *ServiceMock) DoSomething() {
 	this.DoSomething_calls++
 }
 `, Options{AddHeaderNote: true}),
+			Entry("receive-only channel return", `
+package pkg
+
+type Service interface {
+	Listen() <-chan string
+}`,
+				`package test
+
+type ServiceMock struct {
+	Listen_calls             int
+	Listen_return_chanString <-chan string
+}
+
+func (this *ServiceMock) Listen() <-chan string {
+	this.Listen_calls++
+	return this.Listen_return_chanString
+}
+`),
+			Entry("send-only channel param", `
+package pkg
+
+type Service interface {
+	Send(chan<- int)
+}`,
+				`package test
+
+type ServiceMock struct {
+	Send_calls         int
+	Send_param_chanInt chan<- int
+}
+
+func (this *ServiceMock) Send(param chan<- int) {
+	this.Send_calls++
+	this.Send_param_chanInt = param
+}
+`),
+			Entry("bidirectional channel return", `
+package pkg
+
+type Service interface {
+	Stream() chan string
+}`,
+				`package test
+
+type ServiceMock struct {
+	Stream_calls             int
+	Stream_return_chanString chan string
+}
+
+func (this *ServiceMock) Stream() chan string {
+	this.Stream_calls++
+	return this.Stream_return_chanString
+}
+`),
+			Entry("channel of imported type", `
+package pkg
+
+import "net/http"
+
+type Service interface {
+	Listen() <-chan *http.Request
+}`,
+				`package test
+
+import (
+	"net/http"
+)
+
+type ServiceMock struct {
+	Listen_calls              int
+	Listen_return_chanRequest <-chan *http.Request
+}
+
+func (this *ServiceMock) Listen() <-chan *http.Request {
+	this.Listen_calls++
+	return this.Listen_return_chanRequest
+}
+`),
 		)
 	})
 })

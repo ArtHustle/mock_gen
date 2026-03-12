@@ -101,6 +101,8 @@ func (this *generator) collectInterfaceImports(
 			collectImportsFromType(typ.Elem())
 		case *types.Pointer:
 			collectImportsFromType(typ.Elem())
+		case *types.Chan:
+			collectImportsFromType(typ.Elem())
 		}
 	}
 
@@ -883,6 +885,15 @@ func (this *generator) getFieldType(t types.Type) string {
 		return "*" + this.getFieldType(typ.Elem())
 	case *types.Map:
 		return "map[" + this.getFieldType(typ.Key()) + "]" + this.getFieldType(typ.Elem())
+	case *types.Chan:
+		switch typ.Dir() {
+		case types.SendOnly:
+			return "chan<- " + this.getFieldType(typ.Elem())
+		case types.RecvOnly:
+			return "<-chan " + this.getFieldType(typ.Elem())
+		default:
+			return "chan " + this.getFieldType(typ.Elem())
+		}
 	case *types.Alias:
 		return this.getAliasFullName(typ)
 	case *types.Named:
