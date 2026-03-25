@@ -43,7 +43,10 @@ func deducePackagePath(filePath string) (string, error) {
 		return "", fmt.Errorf("error getting absolute file path: %w", err)
 	}
 
+	fileDir := filepath.Dir(absFilePath)
+
 	modCmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
+	modCmd.Dir = fileDir
 	var modOut bytes.Buffer
 	modCmd.Stdout = &modOut
 	err = modCmd.Run()
@@ -53,6 +56,7 @@ func deducePackagePath(filePath string) (string, error) {
 	moduleDir := strings.TrimSpace(modOut.String())
 
 	modulePathCmd := exec.Command("go", "list", "-m")
+	modulePathCmd.Dir = fileDir
 	var modulePathOut bytes.Buffer
 	modulePathCmd.Stdout = &modulePathOut
 	err = modulePathCmd.Run()
@@ -432,13 +436,19 @@ func GenerateMockFileWithOptions(filePath string, opts Options) (string, error) 
 		return "", fmt.Errorf("error deducing package path: %w", err)
 	}
 
+	absFilePath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", fmt.Errorf("error getting absolute file path: %w", err)
+	}
+	fileDir := filepath.Dir(absFilePath)
+
 	fileSet := token.NewFileSet()
 	astFile, err := parser.ParseFile(fileSet, filePath, nil, parser.ParseComments)
 	if err != nil {
 		return "", fmt.Errorf("error parsing file: %w", err)
 	}
 
-	pkg, err := loadPackage(packagePath)
+	pkg, err := loadPackage(packagePath, fileDir)
 	if err != nil {
 		return "", fmt.Errorf("error loading package: %w", err)
 	}
@@ -455,11 +465,12 @@ func findTypeDef(defs map[*ast.Ident]types.Object, name string) types.Object {
 	return nil
 }
 
-func loadPackage(pattern string) (*packages.Package, error) {
+func loadPackage(pattern string, dir string) (*packages.Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedImports | packages.NeedTypes | packages.NeedSyntax |
 			packages.NeedTypesInfo,
+		Dir: dir,
 	}
 	pkgs, err := packages.Load(cfg, pattern)
 	if err != nil {

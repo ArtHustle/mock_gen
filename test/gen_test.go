@@ -49,6 +49,10 @@ var _ = Describe("Mock Generator:", func() {
 		BeforeEach(func() {
 			tempDir, err := os.MkdirTemp(os.TempDir(), "mock_gen_test_")
 			Expect(err).NotTo(HaveOccurred())
+
+			goModFile := filepath.Join(tempDir, "go.mod")
+			Expect(os.WriteFile(goModFile, []byte("module mock_gen_test\n\ngo 1.23\n"), 0644)).To(Succeed())
+
 			inputFile, err := os.CreateTemp(tempDir, "service.go")
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(func() { os.RemoveAll(tempDir) })

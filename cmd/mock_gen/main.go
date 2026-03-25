@@ -43,9 +43,19 @@ func main() {
 	var noHeaderNote bool
 
 	var rootCmd = &cobra.Command{
-		Use:   "mock_gen [input file]",
+		Use:   "mock_gen [flags] <source_file.go>",
 		Short: "Generate Go mocks for interfaces",
-		Args:  cobra.ExactArgs(1),
+		Long: `mock_gen generates mock implementations for all interfaces in a Go source file.
+
+The input file must be inside a Go module (a directory tree containing a go.mod file).
+The generated mock is placed in a "test" subdirectory by default, using the source
+package's types with proper import paths.
+
+Examples:
+  mock_gen service.go
+  mock_gen --output mocks/service_mock.go service.go
+  mock_gen --generate-return-handler --thread-safe service.go`,
+		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			inputFilePath := args[0]
 
