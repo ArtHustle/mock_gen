@@ -459,7 +459,9 @@ func GenerateMockFileWithOptions(filePath string, opts Options) (string, error) 
 func findTypeDef(defs map[*ast.Ident]types.Object, name string) types.Object {
 	for ident, def := range defs {
 		if ident.Name == name {
-			return def
+			if _, ok := def.(*types.TypeName); ok {
+				return def
+			}
 		}
 	}
 	return nil
@@ -479,7 +481,15 @@ func loadPackage(pattern string, dir string) (*packages.Package, error) {
 	if len(pkgs) == 0 {
 		return nil, fmt.Errorf("no packages found for pattern %s", pattern)
 	}
-	return pkgs[0], nil
+	pkg := pkgs[0]
+	if pkg.TypesInfo == nil {
+		var errMsgs []string
+		for _, e := range pkg.Errors {
+			errMsgs = append(errMsgs, e.Msg)
+		}
+		return nil, fmt.Errorf("package %s loaded without type info (errors: %v)", pattern, errMsgs)
+	}
+	return pkg, nil
 }
 
 func (this *generator) collectImportsData(importPackages []*types.Package) ImportsData {

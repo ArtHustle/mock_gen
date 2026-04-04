@@ -42,6 +42,60 @@ var _ = Describe("Mock Generator:", func() {
 		})
 	})
 
+	// Regression test: when a package has a struct field with the same name as an interface,
+	// findTypeDef must return the TypeName (interface declaration), not the struct field.
+	// Previously this was non-deterministic due to map iteration order, causing mock_gen to
+	// silently produce an empty mock on subsequent runs.
+	Context("when interface name collides with a struct field name in the same package", func() {
+		It("generates correct mock on repeated runs", func() {
+			tempDir, err := os.MkdirTemp(os.TempDir(), "mock_gen_collision_test_")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { os.RemoveAll(tempDir) })
+
+			Expect(os.WriteFile(
+				filepath.Join(tempDir, "go.mod"),
+				[]byte("module collision_test\n\ngo 1.23\n"),
+				0644,
+			)).To(Succeed())
+
+			// domain.go defines a struct with a field named "Provider"
+			Expect(os.WriteFile(filepath.Join(tempDir, "domain.go"), []byte(`package service
+
+type Config struct {
+	Provider string
+}
+`), 0644)).To(Succeed())
+
+			// provider.go defines the Provider interface
+			providerFile := filepath.Join(tempDir, "provider.go")
+			Expect(os.WriteFile(providerFile, []byte(`package service
+
+import "context"
+
+type Provider interface {
+	Delete(ctx context.Context, id string) error
+}
+`), 0644)).To(Succeed())
+
+			testDir := filepath.Join(tempDir, "test")
+			Expect(os.MkdirAll(testDir, 0755)).To(Succeed())
+			outputFile := filepath.Join(testDir, "provider_mock.go")
+
+			// Run mock_gen 10 times — every run must produce a non-empty mock with the Delete method.
+			// Without the TypeName filter in findTypeDef, map iteration non-determinism causes
+			// findTypeDef to return the struct field "Provider string" instead of the interface
+			// declaration, resulting in an empty mock. Running 10 times makes this highly likely
+			// to be caught even though the failure is non-deterministic.
+			for i := 1; i <= 10; i++ {
+				result, err := GenerateMockFileWithOptions(providerFile, Options{})
+				Expect(err).NotTo(HaveOccurred(), "run %d failed", i)
+				Expect(result).To(ContainSubstring("ProviderMock"), "run %d: mock struct missing", i)
+				Expect(result).To(ContainSubstring("Delete_calls"), "run %d: Delete method missing", i)
+				Expect(os.WriteFile(outputFile, []byte(result), 0644)).To(Succeed())
+			}
+		})
+	})
+
 	Context("if input file exists", func() {
 		var inputFilePath string
 		var outputFilePath string
