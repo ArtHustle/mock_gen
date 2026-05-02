@@ -11,8 +11,8 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gexec"
 
-	. "github.com/ArtHustle/moc_gen"
-	_ "github.com/ArtHustle/moc_gen/test/dummy"
+	. "github.com/ArtHustle/mock_gen"
+	_ "github.com/ArtHustle/mock_gen/test/dummy"
 )
 
 const (
@@ -543,7 +543,7 @@ func (this *ServiceMock) Add(param mock_gen.MyParam) mock_gen.MyReturn {
 			Entry("alias for struct from another package", `
 package pkg
 
-import "github.com/ArtHustle/moc_gen/test/dummy"
+import "github.com/ArtHustle/mock_gen/test/dummy"
 
 type MyID = dummy.IntAlias
 
@@ -784,7 +784,7 @@ func (this *ServiceMock) Read(p []byte) (n int, err error) {
 			Entry("import generic type", `
 package pkg
 
-import "github.com/ArtHustle/moc_gen/test/dummy"
+import "github.com/ArtHustle/mock_gen/test/dummy"
 
 type Service interface {
 	Add(dummy.One[int])
@@ -792,7 +792,7 @@ type Service interface {
 				`package test
 
 import (
-	"github.com/ArtHustle/moc_gen/test/dummy"
+	"github.com/ArtHustle/mock_gen/test/dummy"
 )
 
 type ServiceMock struct {
@@ -809,9 +809,9 @@ func (this *ServiceMock) Add(param dummy.One[int]) {
 package pkg
 
 import (
-	a "github.com/ArtHustle/moc_gen/test/dummy/a/model"
-	b "github.com/ArtHustle/moc_gen/test/dummy/b/model"
-	c "github.com/ArtHustle/moc_gen/test/dummy/c/model"
+	a "github.com/ArtHustle/mock_gen/test/dummy/a/model"
+	b "github.com/ArtHustle/mock_gen/test/dummy/b/model"
+	c "github.com/ArtHustle/mock_gen/test/dummy/c/model"
 )
 
 type Service interface {
@@ -820,9 +820,9 @@ type Service interface {
 				`package test
 
 import (
-	"github.com/ArtHustle/moc_gen/test/dummy/a/model"
-	bModel "github.com/ArtHustle/moc_gen/test/dummy/b/model"
-	cModel "github.com/ArtHustle/moc_gen/test/dummy/c/model"
+	"github.com/ArtHustle/mock_gen/test/dummy/a/model"
+	bModel "github.com/ArtHustle/mock_gen/test/dummy/b/model"
+	cModel "github.com/ArtHustle/mock_gen/test/dummy/c/model"
 )
 
 type ServiceMock struct {
@@ -843,8 +843,8 @@ func (this *ServiceMock) Add(param1 model.A, param2 bModel.B, param3 cModel.C) {
 package pkg
 
 import (
-	a "github.com/ArtHustle/moc_gen/test/dummy/a/model"
-	b "github.com/ArtHustle/moc_gen/test/dummy/b/model"
+	a "github.com/ArtHustle/mock_gen/test/dummy/a/model"
+	b "github.com/ArtHustle/mock_gen/test/dummy/b/model"
 )
 
 type Service interface {
@@ -853,8 +853,8 @@ type Service interface {
 				`package test
 
 import (
-	"github.com/ArtHustle/moc_gen/test/dummy/a/model"
-	bModel "github.com/ArtHustle/moc_gen/test/dummy/b/model"
+	"github.com/ArtHustle/mock_gen/test/dummy/a/model"
+	bModel "github.com/ArtHustle/mock_gen/test/dummy/b/model"
 )
 
 type ServiceMock struct {
@@ -873,8 +873,8 @@ func (this *ServiceMock) Add(param1 model.A, param2 bModel.A) {
 package pkg
 
 import (
-	a "github.com/ArtHustle/moc_gen/test/dummy/a/model"
-	b "github.com/ArtHustle/moc_gen/test/dummy/b/model"
+	a "github.com/ArtHustle/mock_gen/test/dummy/a/model"
+	b "github.com/ArtHustle/mock_gen/test/dummy/b/model"
 )
 
 type Service interface {
@@ -883,8 +883,8 @@ type Service interface {
 				`package test
 
 import (
-	"github.com/ArtHustle/moc_gen/test/dummy/a/model"
-	bModel "github.com/ArtHustle/moc_gen/test/dummy/b/model"
+	"github.com/ArtHustle/mock_gen/test/dummy/a/model"
+	bModel "github.com/ArtHustle/mock_gen/test/dummy/b/model"
 )
 
 type ServiceMock struct {
@@ -902,7 +902,7 @@ func (this *ServiceMock) Add() (model.A, bModel.A) {
 package pkg
 
 import (
-	"github.com/ArtHustle/moc_gen/test/dummy/a/model"
+	"github.com/ArtHustle/mock_gen/test/dummy/a/model"
 )
 
 type Service interface {
@@ -911,7 +911,7 @@ type Service interface {
 				`package test
 
 import (
-	"github.com/ArtHustle/moc_gen/test/dummy/a/model"
+	"github.com/ArtHustle/mock_gen/test/dummy/a/model"
 )
 
 type ServiceMock struct {
@@ -927,7 +927,7 @@ func (this *ServiceMock) Add() []model.A {
 			Entry("type alias param and return", `
 package pkg
 
-import "github.com/ArtHustle/moc_gen/test/dummy"
+import "github.com/ArtHustle/mock_gen/test/dummy"
 
 type Service interface {
 	Get(dummy.IntAlias) dummy.IntAlias
@@ -936,7 +936,7 @@ type Service interface {
 				`package test
 
 import (
-	"github.com/ArtHustle/moc_gen/test/dummy"
+	"github.com/ArtHustle/mock_gen/test/dummy"
 )
 
 type ServiceMock struct {
@@ -1015,7 +1015,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ArtHustle/moc_gen/test/dummy"
+	"github.com/ArtHustle/mock_gen/test/dummy"
 )
 
 type MyStruct struct{}
@@ -1030,7 +1030,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ArtHustle/moc_gen/test/dummy"
+	"github.com/ArtHustle/mock_gen/test/dummy"
 	"mock_gen"
 )
 

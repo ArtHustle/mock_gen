@@ -17,7 +17,7 @@ var mockGeneratorPath string
 
 var _ = BeforeSuite(func() {
 	var err error
-	mockGeneratorPath, err = gexec.Build("github.com/ArtHustle/moc_gen/cmd/mock_gen")
+	mockGeneratorPath, err = gexec.Build("github.com/ArtHustle/mock_gen/cmd/mock_gen")
 	Expect(err).NotTo(HaveOccurred())
 })
 

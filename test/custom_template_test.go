@@ -4,7 +4,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	. "github.com/ArtHustle/moc_gen"
+	. "github.com/ArtHustle/mock_gen"
 )
 
 var _ = Describe("Custom Template", func() {
@@ -945,7 +945,7 @@ type Stub struct{}`
 
 		It("should access Imports.NonStdImports field", func() {
 			input := `package pkg
-import "github.com/ArtHustle/moc_gen/test/dummy"
+import "github.com/ArtHustle/mock_gen/test/dummy"
 type Service interface { Process(dummy.Struct) }`
 
 			customTemplate := `package test

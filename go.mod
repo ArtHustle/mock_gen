@@ -1,4 +1,4 @@
-module github.com/ArtHustle/moc_gen
+module github.com/ArtHustle/mock_gen
 
 go 1.25.5
 
