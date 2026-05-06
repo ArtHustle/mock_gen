@@ -158,6 +158,23 @@ func (this *ServiceMock) Add_return_string(value string) {
 }
 ```
 
+### Combining with `--generate-return-handler`
+
+When both flags are set, the dynamic-handler field is also unexported and exposed via a setter method. Install a handler with `mock.Add_return(handler)` instead of direct field assignment:
+
+```go
+mock := &ServiceMock{}
+mock.Add_return(func(one int) string {
+    return fmt.Sprintf("got %d", one)
+})
+```
+
+Notes:
+
+- The handler setter is write-only; there is no getter (callers don't read it back).
+- Variadic params render as slices in the handler signature: `Log(values ...int)` produces `func([]int)`. Call it with `mock.Log_return(func(values []int) { ... })`.
+- The mock's mutex protects only the mock's own fields. A handler that captures external state (e.g. a slice of recorded calls) must guard that state itself if the system under test is concurrent.
+
 ## Custom Templates
 
 You can replace the built-in template with your own Go `text/template` using `--template`. The template receives a `MockData` struct and its output is run through `gofmt`.
@@ -215,6 +232,7 @@ type GetterData struct {
     CallsGetter   GetterMethod
     ParamGetters  []GetterMethod
     ReturnSetters []SetterMethod
+    HandlerSetter *SetterMethod  // non-nil when --thread-safe AND --generate-return-handler AND method has returns
 }
 
 type GetterMethod struct {

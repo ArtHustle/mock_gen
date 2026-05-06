@@ -230,6 +230,7 @@ type GetterData struct {
 	CallsGetter   GetterMethod
 	ParamGetters  []GetterMethod
 	ReturnSetters []SetterMethod
+	HandlerSetter *SetterMethod
 }
 
 type GetterMethod struct {
@@ -623,24 +624,11 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 			fieldName = strings.ToLower(method.Name()[0:1]) + method.Name()[1:] + "_return"
 		}
 
-		var paramTypes, returnTypes strings.Builder
-		for j := range sig.Params().Len() {
-			if j > 0 {
-				paramTypes.WriteString(", ")
-			}
-			paramTypes.WriteString(this.getFieldType(sig.Params().At(j).Type()))
-		}
-		for j := range sig.Results().Len() {
-			if j > 0 {
-				returnTypes.WriteString(", ")
-			}
-			returnTypes.WriteString(this.getFieldType(sig.Results().At(j).Type()))
-		}
-
+		paramTypes, returnTypes := this.handlerSignatureTypes(sig)
 		methodData.ReturnHandler = &ReturnHandlerData{
 			FieldName:   fieldName,
-			ParamTypes:  paramTypes.String(),
-			ReturnTypes: returnTypes.String(),
+			ParamTypes:  paramTypes,
+			ReturnTypes: returnTypes,
 		}
 	}
 
@@ -767,7 +755,40 @@ func (this *generator) collectGetterData(method *types.Func, sig *types.Signatur
 		})
 	}
 
+	if this.options.GenerateReturnHandler && sig.Results().Len() > 0 {
+		methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
+		paramTypes, returnTypes := this.handlerSignatureTypes(sig)
+		funcType := "func(" + paramTypes + ") "
+		if sig.Results().Len() > 1 {
+			funcType += "(" + returnTypes + ")"
+		} else {
+			funcType += returnTypes
+		}
+		getterData.HandlerSetter = &SetterMethod{
+			MethodName: method.Name() + "_return",
+			FieldName:  methodName + "_return",
+			ParamType:  funcType,
+		}
+	}
+
 	return getterData
+}
+
+func (this *generator) handlerSignatureTypes(sig *types.Signature) (string, string) {
+	var paramTypes, returnTypes strings.Builder
+	for j := range sig.Params().Len() {
+		if j > 0 {
+			paramTypes.WriteString(", ")
+		}
+		paramTypes.WriteString(this.getFieldType(sig.Params().At(j).Type()))
+	}
+	for j := range sig.Results().Len() {
+		if j > 0 {
+			returnTypes.WriteString(", ")
+		}
+		returnTypes.WriteString(this.getFieldType(sig.Results().At(j).Type()))
+	}
+	return paramTypes.String(), returnTypes.String()
 }
 
 func getReturnMember(funcObj *types.Func, returnIndex int) string {

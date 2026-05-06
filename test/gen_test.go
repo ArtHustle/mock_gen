@@ -1185,6 +1185,329 @@ func (this *ServiceMock) Process_calls() int {
 	return this.process_calls
 }
 `, Options{MakeThreadSafe: true}),
+			Entry("thread-safe mock with return handler", `
+package pkg
+
+type Service interface {
+	Send(one int) error
+	Process()
+}`,
+				`package test
+
+import (
+	"sync"
+)
+
+type ServiceMock struct {
+	mu sync.Mutex
+
+	process_calls int
+
+	send_calls        int
+	send_param_one    int
+	send_return       func(int) error
+	send_return_error error
+}
+
+func (this *ServiceMock) Process() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.process_calls++
+}
+
+func (this *ServiceMock) Process_calls() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.process_calls
+}
+
+func (this *ServiceMock) Send(one int) error {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.send_calls++
+	this.send_param_one = one
+	if this.send_return != nil {
+		return this.send_return(one)
+	}
+	return this.send_return_error
+}
+
+func (this *ServiceMock) Send_calls() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.send_calls
+}
+
+func (this *ServiceMock) Send_param_one() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.send_param_one
+}
+
+func (this *ServiceMock) Send_return(value func(int) error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.send_return = value
+}
+
+func (this *ServiceMock) Send_return_error(value error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.send_return_error = value
+}
+`, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
+			Entry("thread-safe handler: no params", `
+package pkg
+
+type Service interface {
+	Get() string
+}`,
+				`package test
+
+import (
+	"sync"
+)
+
+type ServiceMock struct {
+	mu sync.Mutex
+
+	get_calls         int
+	get_return        func() string
+	get_return_string string
+}
+
+func (this *ServiceMock) Get() string {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.get_calls++
+	if this.get_return != nil {
+		return this.get_return()
+	}
+	return this.get_return_string
+}
+
+func (this *ServiceMock) Get_calls() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.get_calls
+}
+
+func (this *ServiceMock) Get_return(value func() string) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.get_return = value
+}
+
+func (this *ServiceMock) Get_return_string(value string) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.get_return_string = value
+}
+`, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
+			Entry("thread-safe handler: imported types in handler signature", `
+package pkg
+
+import (
+	"context"
+	"net/http"
+)
+
+type Service interface {
+	Do(ctx context.Context, r *http.Request) (*http.Response, error)
+}`,
+				`package test
+
+import (
+	"context"
+	"net/http"
+	"sync"
+)
+
+type ServiceMock struct {
+	mu sync.Mutex
+
+	do_calls           int
+	do_param_ctx       context.Context
+	do_param_r         *http.Request
+	do_return          func(context.Context, *http.Request) (*http.Response, error)
+	do_return_response *http.Response
+	do_return_error    error
+}
+
+func (this *ServiceMock) Do(ctx context.Context, r *http.Request) (*http.Response, error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.do_calls++
+	this.do_param_ctx = ctx
+	this.do_param_r = r
+	if this.do_return != nil {
+		return this.do_return(ctx, r)
+	}
+	return this.do_return_response, this.do_return_error
+}
+
+func (this *ServiceMock) Do_calls() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.do_calls
+}
+
+func (this *ServiceMock) Do_param_ctx() context.Context {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.do_param_ctx
+}
+
+func (this *ServiceMock) Do_param_r() *http.Request {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.do_param_r
+}
+
+func (this *ServiceMock) Do_return(value func(context.Context, *http.Request) (*http.Response, error)) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.do_return = value
+}
+
+func (this *ServiceMock) Do_return_response(value *http.Response) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.do_return_response = value
+}
+
+func (this *ServiceMock) Do_return_error(value error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.do_return_error = value
+}
+`, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
+			Entry("thread-safe handler: variadic param renders as slice", `
+package pkg
+
+type Service interface {
+	Log(values ...int) error
+}`,
+				`package test
+
+import (
+	"sync"
+)
+
+type ServiceMock struct {
+	mu sync.Mutex
+
+	log_calls        int
+	log_param_values []int
+	log_return       func([]int) error
+	log_return_error error
+}
+
+func (this *ServiceMock) Log(values ...int) error {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.log_calls++
+	this.log_param_values = values
+	if this.log_return != nil {
+		return this.log_return(values)
+	}
+	return this.log_return_error
+}
+
+func (this *ServiceMock) Log_calls() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.log_calls
+}
+
+func (this *ServiceMock) Log_param_values() []int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.log_param_values
+}
+
+func (this *ServiceMock) Log_return(value func([]int) error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.log_return = value
+}
+
+func (this *ServiceMock) Log_return_error(value error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.log_return_error = value
+}
+`, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
+			Entry("thread-safe handler: named multi-returns drop names in handler type", `
+package pkg
+
+type Service interface {
+	Fetch(id int) (name string, age int, err error)
+}`,
+				`package test
+
+import (
+	"sync"
+)
+
+type ServiceMock struct {
+	mu sync.Mutex
+
+	fetch_calls       int
+	fetch_param_id    int
+	fetch_return      func(int) (string, int, error)
+	fetch_return_name string
+	fetch_return_age  int
+	fetch_return_err  error
+}
+
+func (this *ServiceMock) Fetch(id int) (name string, age int, err error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.fetch_calls++
+	this.fetch_param_id = id
+	if this.fetch_return != nil {
+		return this.fetch_return(id)
+	}
+	return this.fetch_return_name, this.fetch_return_age, this.fetch_return_err
+}
+
+func (this *ServiceMock) Fetch_calls() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.fetch_calls
+}
+
+func (this *ServiceMock) Fetch_param_id() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.fetch_param_id
+}
+
+func (this *ServiceMock) Fetch_return(value func(int) (string, int, error)) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.fetch_return = value
+}
+
+func (this *ServiceMock) Fetch_return_name(value string) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.fetch_return_name = value
+}
+
+func (this *ServiceMock) Fetch_return_age(value int) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.fetch_return_age = value
+}
+
+func (this *ServiceMock) Fetch_return_err(value error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.fetch_return_err = value
+}
+`, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
 			Entry("simple interface with header note", `
 package pkg
 

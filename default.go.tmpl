@@ -40,6 +40,12 @@
 	return this.{{.FieldName}}
 }
 
+{{end}}{{if $method.Getters.HandlerSetter}}func (this *{{$iface.MockName}}) {{$method.Getters.HandlerSetter.MethodName}}(value {{$method.Getters.HandlerSetter.ParamType}}) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.{{$method.Getters.HandlerSetter.FieldName}} = value
+}
+
 {{end}}{{range $method.Getters.ReturnSetters}}func (this *{{$iface.MockName}}) {{.MethodName}}(value {{.ParamType}}) {
 	this.mu.Lock()
 	defer this.mu.Unlock()
