@@ -17,6 +17,19 @@
 {{end}}{{end}}}
 
 {{range $method := $iface.Methods}}func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
+{{- if and $.Options.MakeThreadSafe $method.Returns}}
+	this.mu.Lock()
+	this.{{$method.CallsField}}++
+{{range $i, $param := $method.Params}}	this.{{$param.Name}} = {{index $method.Signature.ParamNames $i}}
+{{end}}{{if $method.ReturnHandler}}	handler := this.{{$method.ReturnHandler.FieldName}}
+{{end}}{{range $i, $rf := $method.Signature.ReturnFields}}	_r{{$i}} := {{$rf}}
+{{end}}	this.mu.Unlock()
+
+{{if $method.ReturnHandler}}	if handler != nil {
+		return handler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
+	}
+{{end}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}_r{{$i}}{{end}}
+{{else}}
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -26,7 +39,7 @@
 		return this.{{$method.ReturnHandler.FieldName}}({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
 	}
 {{end}}{{if $method.Returns}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}{{$rf}}{{end}}
-{{end}}}
+{{end}}{{end}}}
 
 {{if $method.Getters}}func (this *{{$iface.MockName}}) {{$method.Name}}_calls() int {
 	this.mu.Lock()

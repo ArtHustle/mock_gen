@@ -96,6 +96,42 @@ type Provider interface {
 		})
 	})
 
+	// Regression test: a thread-safe mock with a return handler must NOT hold the mutex
+	// while invoking the handler. Otherwise a handler that calls back into the mock
+	// (e.g. installs a new return value, reads call counts, or invokes another method)
+	// deadlocks. The fix snapshots the handler and static fallbacks under the lock,
+	// releases, and only then calls user code.
+	Context("when both --thread-safe and --generate-return-handler are set", func() {
+		It("releases the mutex before invoking the handler", func() {
+			source := `package pkg
+
+type Service interface {
+	Do(x int) error
+}`
+			result, err := GenerateMockContentWithOptions(source, Options{
+				MakeThreadSafe:        true,
+				GenerateReturnHandler: true,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Inside the body of Do(), the unlock must precede the handler invocation.
+			body := result[strings.Index(result, "func (this *ServiceMock) Do("):]
+			body = body[:strings.Index(body, "\n}\n")]
+
+			unlockIdx := strings.Index(body, "this.mu.Unlock()")
+			handlerIdx := strings.Index(body, "if handler != nil")
+			Expect(unlockIdx).To(BeNumerically(">", 0), "Unlock() should appear in body")
+			Expect(handlerIdx).To(BeNumerically(">", 0), "handler check should appear in body")
+			Expect(unlockIdx).To(BeNumerically("<", handlerIdx),
+				"mutex must be released before invoking the handler (re-entrancy safety)")
+
+			// The body must not use `defer this.mu.Unlock()` — that would hold the lock
+			// across the handler invocation.
+			Expect(body).NotTo(ContainSubstring("defer this.mu.Unlock()"),
+				"body must not defer Unlock; that holds the lock across user code")
+		})
+	})
+
 	Context("if input file exists", func() {
 		var inputFilePath string
 		var outputFilePath string
@@ -1149,10 +1185,12 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Add(one int) string {
 	this.mu.Lock()
-	defer this.mu.Unlock()
 	this.add_calls++
 	this.add_param_one = one
-	return this.add_return_string
+	_r0 := this.add_return_string
+	this.mu.Unlock()
+
+	return _r0
 }
 
 func (this *ServiceMock) Add_calls() int {
@@ -1223,13 +1261,16 @@ func (this *ServiceMock) Process_calls() int {
 
 func (this *ServiceMock) Send(one int) error {
 	this.mu.Lock()
-	defer this.mu.Unlock()
 	this.send_calls++
 	this.send_param_one = one
-	if this.send_return != nil {
-		return this.send_return(one)
+	handler := this.send_return
+	_r0 := this.send_return_error
+	this.mu.Unlock()
+
+	if handler != nil {
+		return handler(one)
 	}
-	return this.send_return_error
+	return _r0
 }
 
 func (this *ServiceMock) Send_calls() int {
@@ -1278,12 +1319,15 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Get() string {
 	this.mu.Lock()
-	defer this.mu.Unlock()
 	this.get_calls++
-	if this.get_return != nil {
-		return this.get_return()
+	handler := this.get_return
+	_r0 := this.get_return_string
+	this.mu.Unlock()
+
+	if handler != nil {
+		return handler()
 	}
-	return this.get_return_string
+	return _r0
 }
 
 func (this *ServiceMock) Get_calls() int {
@@ -1336,14 +1380,18 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Do(ctx context.Context, r *http.Request) (*http.Response, error) {
 	this.mu.Lock()
-	defer this.mu.Unlock()
 	this.do_calls++
 	this.do_param_ctx = ctx
 	this.do_param_r = r
-	if this.do_return != nil {
-		return this.do_return(ctx, r)
+	handler := this.do_return
+	_r0 := this.do_return_response
+	_r1 := this.do_return_error
+	this.mu.Unlock()
+
+	if handler != nil {
+		return handler(ctx, r)
 	}
-	return this.do_return_response, this.do_return_error
+	return _r0, _r1
 }
 
 func (this *ServiceMock) Do_calls() int {
@@ -1405,13 +1453,16 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Log(values ...int) error {
 	this.mu.Lock()
-	defer this.mu.Unlock()
 	this.log_calls++
 	this.log_param_values = values
-	if this.log_return != nil {
-		return this.log_return(values)
+	handler := this.log_return
+	_r0 := this.log_return_error
+	this.mu.Unlock()
+
+	if handler != nil {
+		return handler(values)
 	}
-	return this.log_return_error
+	return _r0
 }
 
 func (this *ServiceMock) Log_calls() int {
@@ -1463,13 +1514,18 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Fetch(id int) (name string, age int, err error) {
 	this.mu.Lock()
-	defer this.mu.Unlock()
 	this.fetch_calls++
 	this.fetch_param_id = id
-	if this.fetch_return != nil {
-		return this.fetch_return(id)
+	handler := this.fetch_return
+	_r0 := this.fetch_return_name
+	_r1 := this.fetch_return_age
+	_r2 := this.fetch_return_err
+	this.mu.Unlock()
+
+	if handler != nil {
+		return handler(id)
 	}
-	return this.fetch_return_name, this.fetch_return_age, this.fetch_return_err
+	return _r0, _r1, _r2
 }
 
 func (this *ServiceMock) Fetch_calls() int {

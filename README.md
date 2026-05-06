@@ -133,10 +133,12 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Add(one int) string {
 	this.mu.Lock()
-	defer this.mu.Unlock()
 	this.add_calls++
 	this.add_param_one = one
-	return this.add_return_string
+	_r0 := this.add_return_string
+	this.mu.Unlock()
+
+	return _r0
 }
 
 func (this *ServiceMock) Add_calls() int {
@@ -174,6 +176,7 @@ Notes:
 - The handler setter is write-only; there is no getter (callers don't read it back).
 - Variadic params render as slices in the handler signature: `Log(values ...int)` produces `func([]int)`. Call it with `mock.Log_return(func(values []int) { ... })`.
 - The mock's mutex protects only the mock's own fields. A handler that captures external state (e.g. a slice of recorded calls) must guard that state itself if the system under test is concurrent.
+- The mutex is **released before the handler runs**. The generated method snapshots the handler reference and any static fallbacks under the lock, unlocks, and only then invokes the handler. This means a handler can safely call back into the same mock — install a new return value, read call counts, invoke another method — without deadlocking. A handler installed by `mock.Add_return(newHandler)` mid-flight only takes effect on the next call; the in-flight call uses the snapshot.
 
 ## Custom Templates
 
