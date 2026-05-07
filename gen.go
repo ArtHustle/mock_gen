@@ -176,8 +176,16 @@ func assignAliasesToImportPaths(importPackages []*types.Package, currentPkgPath 
 type Options struct {
 	GenerateReturnHandler bool
 	MakeThreadSafe        bool
+	MethodAPI             bool
 	AddHeaderNote         bool
 	CustomTemplate        string
+}
+
+// UseMethodAPI reports whether the generated mock should expose unexported
+// fields and method-based accessors. Always true when MakeThreadSafe is set
+// (thread safety requires the method-based API).
+func (o Options) UseMethodAPI() bool {
+	return o.MakeThreadSafe || o.MethodAPI
 }
 
 type MockData struct {
@@ -593,7 +601,7 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 	sig := method.Type().(*types.Signature)
 
 	callsFieldName := method.Name() + "_calls"
-	if this.options.MakeThreadSafe {
+	if this.options.UseMethodAPI() {
 		callsFieldName = strings.ToLower(method.Name()[0:1]) + method.Name()[1:] + "_calls"
 	}
 
@@ -608,7 +616,7 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 		param := sig.Params().At(j)
 		parType := this.getFieldType(param.Type())
 		fieldName := getParamMember(method, j)
-		if this.options.MakeThreadSafe {
+		if this.options.UseMethodAPI() {
 			methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
 			fieldName = methodName + "_param_" + fieldName[len(method.Name()+"_param_"):]
 		}
@@ -620,7 +628,7 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 
 	if this.options.GenerateReturnHandler && sig.Results().Len() > 0 {
 		fieldName := method.Name() + "_return"
-		if this.options.MakeThreadSafe {
+		if this.options.UseMethodAPI() {
 			fieldName = strings.ToLower(method.Name()[0:1]) + method.Name()[1:] + "_return"
 		}
 
@@ -635,7 +643,7 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 	for j := range sig.Results().Len() {
 		result := sig.Results().At(j)
 		fieldName := getReturnMember(method, j)
-		if this.options.MakeThreadSafe {
+		if this.options.UseMethodAPI() {
 			methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
 			fieldName = methodName + "_return_" + fieldName[len(method.Name()+"_return_"):]
 		}
@@ -647,7 +655,7 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 
 	methodData.Signature = this.collectSignatureData(method, sig)
 
-	if this.options.MakeThreadSafe {
+	if this.options.UseMethodAPI() {
 		methodData.Getters = this.collectGetterData(method, sig)
 	}
 
@@ -695,7 +703,7 @@ func (this *generator) collectSignatureData(method *types.Func, sig *types.Signa
 			returns.WriteString(pref + this.getFieldType(result.Type()))
 
 			returnField := getReturnMember(method, j)
-			if this.options.MakeThreadSafe {
+			if this.options.UseMethodAPI() {
 				methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
 				returnField = methodName + "_return_" + returnField[len(method.Name()+"_return_"):]
 			}

@@ -42,27 +42,31 @@
 {{end}}{{end}}}
 
 {{if $method.Getters}}func (this *{{$iface.MockName}}) {{$method.Name}}_calls() int {
+{{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.{{$method.Getters.CallsGetter.FieldName}}
+{{end}}	return this.{{$method.Getters.CallsGetter.FieldName}}
 }
 
 {{range $method.Getters.ParamGetters}}func (this *{{$iface.MockName}}) {{.MethodName}}() {{.ReturnType}} {
+{{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.{{.FieldName}}
+{{end}}	return this.{{.FieldName}}
 }
 
 {{end}}{{if $method.Getters.HandlerSetter}}func (this *{{$iface.MockName}}) {{$method.Getters.HandlerSetter.MethodName}}(value {{$method.Getters.HandlerSetter.ParamType}}) {
+{{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	this.{{$method.Getters.HandlerSetter.FieldName}} = value
+{{end}}	this.{{$method.Getters.HandlerSetter.FieldName}} = value
 }
 
 {{end}}{{range $method.Getters.ReturnSetters}}func (this *{{$iface.MockName}}) {{.MethodName}}(value {{.ParamType}}) {
+{{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	this.{{.FieldName}} = value
+{{end}}	this.{{.FieldName}} = value
 }
 
 {{end}}{{end}}{{end}}{{end}}
