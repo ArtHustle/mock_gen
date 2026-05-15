@@ -55,7 +55,7 @@ type ServiceMock struct {
 `,
 			Options{}),
 
-		Entry("custom template accessing params", `
+		Entry("custom template accessing CallStructFields (param record)", `
 package pkg
 
 type Service interface {
@@ -64,14 +64,14 @@ type Service interface {
 			`package test
 
 {{range $iface := .Interfaces}}type {{$iface.MockName}} struct {
-{{range $iface.Methods}}{{range .Params}}	{{.Name}} {{.Type}}
+{{range $iface.Methods}}{{range .CallStructFields}}	{{.Name}} {{.Type}}
 {{end}}{{end}}}
 {{end}}`,
 			`package test
 
 type ServiceMock struct {
-	add_param_one int
-	add_param_two string
+	One int
+	Two string
 }
 `,
 			Options{}),
@@ -402,7 +402,7 @@ import (
 {{range $iface := .Interfaces}}{{range $method := $iface.Methods}}// Method {{$method.Name}}:
 //   CallsLogField: {{$method.CallsLogField}}
 //   CallStructName: {{$method.CallStructName}}
-//   Params: {{range .Params}}{{.Name}}:{{.Type}} {{end}}
+//   CallStructFields: {{range .CallStructFields}}{{.Name}}:{{.Type}} {{end}}
 //   Returns: {{range .Returns}}{{.Name}}:{{.Type}} {{end}}
 {{end}}{{end}}
 type Stub struct{}
@@ -417,7 +417,7 @@ import (
 // Method Process:
 //   CallsLogField: process_calls_log
 //   CallStructName: ServiceMock_Process_Call
-//   Params: process_param_ctx:context.Context process_param_data:string
+//   CallStructFields: Ctx:context.Context Data:string
 //   Returns: process_return_int:int process_return_error:error
 
 type Stub struct{}
@@ -452,8 +452,7 @@ import (
 {{range $method := $iface.Methods}}{{if $method.Getters}}// Getters for {{$method.Name}}:
 //   CallsGetter: {{$method.Getters.CallsGetter.MethodName}}() {{$method.Getters.CallsGetter.ReturnType}}
 //   CallByIndex: {{$method.Getters.CallByIndex.MethodName}}(i int) {{$method.Getters.CallByIndex.ReturnType}}
-{{range $method.Getters.ParamGetters}}//   ParamGetter: {{.MethodName}}() {{.ReturnType}}
-{{end}}{{range $method.Getters.ReturnSetters}}//   ReturnSetter: {{.MethodName}}({{.ParamType}})
+{{range $method.Getters.ReturnSetters}}//   ReturnSetter: {{.MethodName}}({{.ParamType}})
 {{end}}{{end}}{{end}}{{end}}
 type Dummy struct{}
 `
@@ -472,7 +471,6 @@ type ServiceMock struct {
 // Getters for Add:
 //   CallsGetter: Add_calls() []ServiceMock_Add_Call
 //   CallByIndex: Add_call(i int) ServiceMock_Add_Call
-//   ParamGetter: Add_param_one() int
 //   ReturnSetter: Add_return_string(string)
 
 type Dummy struct{}
@@ -552,7 +550,7 @@ type Service interface {
 
 			customTemplate := `package test
 
-{{range $iface := .Interfaces}}{{range $method := $iface.Methods}}// {{$method.Name}}: params={{len .Params}} returns={{len .Returns}}
+{{range $iface := .Interfaces}}{{range $method := $iface.Methods}}// {{$method.Name}}: params={{len .CallStructFields}} returns={{len .Returns}}
 {{end}}{{end}}
 type Stub struct{}
 `
@@ -1032,7 +1030,7 @@ type Service interface { Add(one int) string }`
 
 			customTemplate := `package test
 {{range .Interfaces}}{{range .Methods}}{{if .Getters}}// CallsGetter.MethodName: {{.Getters.CallsGetter.MethodName}}
-// ParamGetters: {{len .Getters.ParamGetters}}
+// CallByIndex.MethodName: {{.Getters.CallByIndex.MethodName}}
 // ReturnSetters: {{len .Getters.ReturnSetters}}
 {{end}}{{end}}{{end}}
 type Stub struct{}`
@@ -1043,7 +1041,7 @@ type Stub struct{}`
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(actual).To(ContainSubstring("CallsGetter.MethodName: Add_calls"))
-			Expect(actual).To(ContainSubstring("ParamGetters: 1"))
+			Expect(actual).To(ContainSubstring("CallByIndex.MethodName: Add_call"))
 			Expect(actual).To(ContainSubstring("ReturnSetters: 1"))
 		})
 

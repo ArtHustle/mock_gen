@@ -140,6 +140,51 @@ type Service interface {
 			"Reset_history must not clear armed static return values")
 	})
 
+	// --- negative-index semantics on Method_call(i) ---
+	//
+	// The generated mock emits a `mockCallAt[T]` helper at file scope and
+	// every `Method_call(i int)` delegates to it. We assert both: (a) the
+	// helper is emitted exactly once per generated file and the indexer
+	// delegates to it, and (b) the helper's behavior in isolation (negative
+	// index = offset from end, out-of-range = panic).
+
+	It("emits the mockCallAt helper once and delegates from Method_call", func() {
+		result, err := GenerateMockContentWithOptions(`
+package pkg
+
+type Service interface {
+	Send(x int)
+	Process()
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(strings.Count(result, "func mockCallAt[T any](log []T, i int) T")).To(Equal(1),
+			"helper must be emitted exactly once per file even with multiple methods")
+		Expect(result).To(ContainSubstring("return mockCallAt(this.send_calls_log, i)"))
+		Expect(result).To(ContainSubstring("return mockCallAt(this.process_calls_log, i)"))
+	})
+
+	DescribeTable("mockCallAt indexing semantics",
+		func(log []int, i int, want int) {
+			Expect(testMockCallAt(log, i)).To(Equal(want))
+		},
+		Entry("i=0 returns first", []int{10, 20, 30}, 0, 10),
+		Entry("i=len-1 returns last", []int{10, 20, 30}, 2, 30),
+		Entry("i=-1 returns last", []int{10, 20, 30}, -1, 30),
+		Entry("i=-2 returns second-to-last", []int{10, 20, 30}, -2, 20),
+		Entry("i=-len returns first", []int{10, 20, 30}, -3, 10),
+	)
+
+	DescribeTable("mockCallAt panics on out-of-range",
+		func(log []int, i int) {
+			Expect(func() { testMockCallAt(log, i) }).To(Panic())
+		},
+		Entry("i past end", []int{10, 20}, 2),
+		Entry("i more negative than -len", []int{10, 20}, -3),
+		Entry("empty log, i=0", []int{}, 0),
+		Entry("empty log, i=-1", []int{}, -1),
+	)
+
 	// --- cross-mock uniqueness: two interfaces in one source must produce
 	// distinct Call struct names per (mock, method) pair, so they don't collide
 	// at package scope. ---

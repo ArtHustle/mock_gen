@@ -16,11 +16,17 @@ var _ = Describe("Return handler", func() {
 
 		Entry("no params, two returns (handler captures both)", `
 package pkg
-
-type Service interface {
-	Add() (string, error)
-}`,
+type Service interface { Add() (string, error) }`,
 			`package test
+
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
 
 type ServiceMock_Add_Call struct {
 }
@@ -47,7 +53,7 @@ func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 }
 
 func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
-	return this.add_calls_log[i]
+	return mockCallAt(this.add_calls_log, i)
 }
 
 func (this *ServiceMock) Add_return(value func() (string, error)) {
@@ -69,11 +75,17 @@ func (this *ServiceMock) Reset_history() {
 
 		Entry("multiple params and returns (handler signature mirrors method)", `
 package pkg
-
-type Service interface {
-	Add(a int, b string) (int, error)
-}`,
+type Service interface { Add(a int, b string) (int, error) }`,
 			`package test
+
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
 
 type ServiceMock_Add_Call struct {
 	A int
@@ -82,16 +94,12 @@ type ServiceMock_Add_Call struct {
 
 type ServiceMock struct {
 	add_calls_log    []ServiceMock_Add_Call
-	add_param_a      int
-	add_param_b      string
 	add_return       func(int, string) (int, error)
 	add_return_int   int
 	add_return_error error
 }
 
 func (this *ServiceMock) Add(a int, b string) (int, error) {
-	this.add_param_a = a
-	this.add_param_b = b
 	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{A: a, B: b})
 	if this.add_return != nil {
 		return this.add_return(a, b)
@@ -106,15 +114,7 @@ func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 }
 
 func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
-	return this.add_calls_log[i]
-}
-
-func (this *ServiceMock) Add_param_a() int {
-	return this.add_param_a
-}
-
-func (this *ServiceMock) Add_param_b() string {
-	return this.add_param_b
+	return mockCallAt(this.add_calls_log, i)
 }
 
 func (this *ServiceMock) Add_return(value func(int, string) (int, error)) {

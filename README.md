@@ -68,29 +68,26 @@ import (
 	"your/project/internal/service/product/model"
 )
 
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+func mockCallAt[T any](log []T, i int) T { /* ... */ }
+
 type ServiceMock_GetProductByID_Call struct {
 	Ctx       context.Context
 	ProductID model.ProductID
 }
 
 type ServiceMock struct {
-	getProductByID_calls_log       []ServiceMock_GetProductByID_Call
-	getProductByID_param_ctx       context.Context
-	getProductByID_param_productID model.ProductID
-	getProductByID_return_product  model.Product
+	getProductByID_calls_log      []ServiceMock_GetProductByID_Call
+	getProductByID_return_product model.Product
 }
 
 func (this *ServiceMock) GetProductByID(ctx context.Context, productID model.ProductID) model.Product {
-	this.getProductByID_param_ctx = ctx
-	this.getProductByID_param_productID = productID
 	this.getProductByID_calls_log = append(this.getProductByID_calls_log, ServiceMock_GetProductByID_Call{Ctx: ctx, ProductID: productID})
 	return this.getProductByID_return_product
 }
 
 func (this *ServiceMock) GetProductByID_calls() []ServiceMock_GetProductByID_Call { /* ... */ }
 func (this *ServiceMock) GetProductByID_call(i int) ServiceMock_GetProductByID_Call { /* ... */ }
-func (this *ServiceMock) GetProductByID_param_ctx() context.Context { /* ... */ }
-func (this *ServiceMock) GetProductByID_param_productID(value model.ProductID) { /* ... */ }
 func (this *ServiceMock) GetProductByID_return_product(value model.Product) { /* ... */ }
 func (this *ServiceMock) Reset_history() { /* ... */ }
 ```
@@ -110,16 +107,12 @@ mock_gen --generate-return-handler service.go
 ```go
 type ServiceMock struct {
 	add_calls_log    []ServiceMock_Add_Call
-	add_param_a      int
-	add_param_b      string
 	add_return       func(int, string) (int, error)  // dynamic handler
 	add_return_int   int                              // static fallback
 	add_return_error error
 }
 
 func (this *ServiceMock) Add(a int, b string) (int, error) {
-	this.add_param_a = a
-	this.add_param_b = b
 	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{A: a, B: b})
 	if this.add_return != nil {
 		return this.add_return(a, b)
@@ -138,8 +131,9 @@ Every method gets a full call log. Per method, the generator emits:
 
 - An exported, public-field struct `<MockName>_<MethodName>_Call` holding one entry per call (one field per param, title-cased from the original param name, or type-derived for unnamed params).
 - A `<MethodName>_calls() []<MockName>_<MethodName>_Call` getter returning the whole log (a defensive copy under `--thread-safe`).
-- A `<MethodName>_call(i int) <MockName>_<MethodName>_Call` indexer (panics on out-of-range; standard slice semantics).
+- A `<MethodName>_call(i int) <MockName>_<MethodName>_Call` indexer. Negative indices count from the end (`-1` is the last call, `-2` the second-to-last). Out-of-range indices panic.
 - A single `Reset_history()` on the mock that zeroes every per-method log without touching installed handlers or armed static return values.
+- A package-private `mockCallAt[T]` helper (emitted once per file) that does the negative-index resolution. Custom templates can ignore it; it's an implementation detail of `_call(i)`.
 
 The log is appended inside the lock under `--thread-safe`, **before** any handler invocation. A handler that panics still leaves the call recorded.
 
@@ -152,6 +146,10 @@ require.Len(t, mock.Send_calls(), 1)
 // "what was passed on the first call?"
 c := mock.Send_call(0)
 require.Equal(t, "user@example.com", c.Email.To)
+
+// "what was passed on the most recent call?"
+last := mock.Send_call(-1)
+require.Equal(t, "latest@example.com", last.Email.To)
 
 // "all emails sent"
 var emails []string
@@ -173,11 +171,15 @@ To migrate:
 // before
 n := mock.Send_calls                 // public int field
 mock.Send_return_string = "hello"    // public field assignment
+last := mock.Send_param_email        // public "last value" field
 
 // after
 n := len(mock.Send_calls())          // method call
 mock.Send_return_string("hello")     // setter method call
+last := mock.Send_call(-1).Email     // negative index on the call log
 ```
+
+`_param_X` getters were removed too — `mock.Send_call(-1).X` gives the same answer.
 
 ### Migration example: hand-rolled fake → generated mock
 
@@ -226,13 +228,11 @@ type ServiceMock struct {
 	mu sync.Mutex
 
 	add_calls_log     []ServiceMock_Add_Call
-	add_param_one     int
 	add_return_string string
 }
 
 func (this *ServiceMock) Add(one int) string {
 	this.mu.Lock()
-	this.add_param_one = one
 	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
 	_r0 := this.add_return_string
 	this.mu.Unlock()
@@ -241,8 +241,7 @@ func (this *ServiceMock) Add(one int) string {
 }
 
 func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call { /* defensive copy under lock */ }
-func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call { /* ... */ }
-func (this *ServiceMock) Add_param_one() int { /* ... */ }
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call { /* mockCallAt(log, i) under lock */ }
 func (this *ServiceMock) Add_return_string(value string) { /* ... */ }
 func (this *ServiceMock) Reset_history() { /* zeros every per-method log */ }
 ```
@@ -290,10 +289,9 @@ type InterfaceData struct {
 type MethodData struct {
     Name             string
     CallStructName   string             // e.g., "ServiceMock_Add_Call"
-    CallStructFields []FieldData        // public, title-cased fields — one per param
+    CallStructFields []FieldData        // public, title-cased fields — one per param (also the source of truth for "what args were recorded")
     CallsLogField    string             // unexported log slice field, e.g. "add_calls_log"
     CallByIndexName  string             // singular indexer method name, e.g. "Add_call"
-    Params           []FieldData
     ReturnHandler    *ReturnHandlerData // non-nil when --generate-return-handler and method has returns
     Returns          []FieldData
     Signature        SignatureData
@@ -320,8 +318,7 @@ type SignatureData struct {
 
 type GetterData struct {
     CallsGetter   GetterMethod   // Method_calls() returns []<MockName>_<MethodName>_Call
-    CallByIndex   *GetterMethod  // Method_call(i int) returns one <MockName>_<MethodName>_Call
-    ParamGetters  []GetterMethod
+    CallByIndex   *GetterMethod  // Method_call(i int) returns one <MockName>_<MethodName>_Call (negative i counts from end)
     ReturnSetters []SetterMethod
     HandlerSetter *SetterMethod  // non-nil when --generate-return-handler AND method has returns
 }

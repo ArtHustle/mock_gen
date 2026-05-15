@@ -19,12 +19,17 @@ var _ = Describe("Default (method-based API, no mutex)", func() {
 
 		Entry("mixed methods (with and without returns)", `
 package pkg
-
-type Service interface {
-	Add(one int) string
-	Process()
-}`,
+type Service interface { Add(one int) string; Process() }`,
 			`package test
+
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
 
 type ServiceMock_Add_Call struct {
 	One int
@@ -35,14 +40,12 @@ type ServiceMock_Process_Call struct {
 
 type ServiceMock struct {
 	add_calls_log     []ServiceMock_Add_Call
-	add_param_one     int
 	add_return_string string
 
 	process_calls_log []ServiceMock_Process_Call
 }
 
 func (this *ServiceMock) Add(one int) string {
-	this.add_param_one = one
 	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
 	return this.add_return_string
 }
@@ -54,11 +57,7 @@ func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 }
 
 func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
-	return this.add_calls_log[i]
-}
-
-func (this *ServiceMock) Add_param_one() int {
-	return this.add_param_one
+	return mockCallAt(this.add_calls_log, i)
 }
 
 func (this *ServiceMock) Add_return_string(value string) {
@@ -76,7 +75,7 @@ func (this *ServiceMock) Process_calls() []ServiceMock_Process_Call {
 }
 
 func (this *ServiceMock) Process_call(i int) ServiceMock_Process_Call {
-	return this.process_calls_log[i]
+	return mockCallAt(this.process_calls_log, i)
 }
 
 func (this *ServiceMock) Reset_history() {
@@ -87,11 +86,17 @@ func (this *ServiceMock) Reset_history() {
 
 		Entry("with return handler (handler invoked under no lock)", `
 package pkg
-
-type Service interface {
-	Add(one int) string
-}`,
+type Service interface { Add(one int) string }`,
 			`package test
+
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
 
 type ServiceMock_Add_Call struct {
 	One int
@@ -99,13 +104,11 @@ type ServiceMock_Add_Call struct {
 
 type ServiceMock struct {
 	add_calls_log     []ServiceMock_Add_Call
-	add_param_one     int
 	add_return        func(int) string
 	add_return_string string
 }
 
 func (this *ServiceMock) Add(one int) string {
-	this.add_param_one = one
 	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
 	if this.add_return != nil {
 		return this.add_return(one)
@@ -120,11 +123,7 @@ func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 }
 
 func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
-	return this.add_calls_log[i]
-}
-
-func (this *ServiceMock) Add_param_one() int {
-	return this.add_param_one
+	return mockCallAt(this.add_calls_log, i)
 }
 
 func (this *ServiceMock) Add_return(value func(int) string) {
@@ -142,11 +141,17 @@ func (this *ServiceMock) Reset_history() {
 
 		Entry("multi-return method (no handler)", `
 package pkg
-
-type Service interface {
-	Add() (string, error)
-}`,
+type Service interface { Add() (string, error) }`,
 			`package test
+
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
 
 type ServiceMock_Add_Call struct {
 }
@@ -169,7 +174,7 @@ func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 }
 
 func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
-	return this.add_calls_log[i]
+	return mockCallAt(this.add_calls_log, i)
 }
 
 func (this *ServiceMock) Add_return_string(value string) {
@@ -187,17 +192,22 @@ func (this *ServiceMock) Reset_history() {
 
 		Entry("imported types in accessor signatures", `
 package pkg
-
 import "net/http"
-
-type Service interface {
-	Send(r *http.Request) (*http.Response, error)
-}`,
+type Service interface { Send(r *http.Request) (*http.Response, error) }`,
 			`package test
 
 import (
 	"net/http"
 )
+
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
 
 type ServiceMock_Send_Call struct {
 	R *http.Request
@@ -205,13 +215,11 @@ type ServiceMock_Send_Call struct {
 
 type ServiceMock struct {
 	send_calls_log       []ServiceMock_Send_Call
-	send_param_r         *http.Request
 	send_return_response *http.Response
 	send_return_error    error
 }
 
 func (this *ServiceMock) Send(r *http.Request) (*http.Response, error) {
-	this.send_param_r = r
 	this.send_calls_log = append(this.send_calls_log, ServiceMock_Send_Call{R: r})
 	return this.send_return_response, this.send_return_error
 }
@@ -223,11 +231,7 @@ func (this *ServiceMock) Send_calls() []ServiceMock_Send_Call {
 }
 
 func (this *ServiceMock) Send_call(i int) ServiceMock_Send_Call {
-	return this.send_calls_log[i]
-}
-
-func (this *ServiceMock) Send_param_r() *http.Request {
-	return this.send_param_r
+	return mockCallAt(this.send_calls_log, i)
 }
 
 func (this *ServiceMock) Send_return_response(value *http.Response) {
@@ -245,14 +249,18 @@ func (this *ServiceMock) Reset_history() {
 
 		Entry("embedded interface from another package", `
 package pkg
-
 import "io"
-
-type Service interface {
-	io.Closer
-	Add()
-}`,
+type Service interface { io.Closer; Add() }`,
 			`package test
+
+// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
 
 type ServiceMock_Add_Call struct {
 }
@@ -278,7 +286,7 @@ func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 }
 
 func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
-	return this.add_calls_log[i]
+	return mockCallAt(this.add_calls_log, i)
 }
 
 func (this *ServiceMock) Close() error {
@@ -293,7 +301,7 @@ func (this *ServiceMock) Close_calls() []ServiceMock_Close_Call {
 }
 
 func (this *ServiceMock) Close_call(i int) ServiceMock_Close_Call {
-	return this.close_calls_log[i]
+	return mockCallAt(this.close_calls_log, i)
 }
 
 func (this *ServiceMock) Close_return_error(value error) {

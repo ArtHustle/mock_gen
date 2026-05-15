@@ -39,6 +39,16 @@ func runGenEntry(input, expectedOutputTmpl string, extra ...Options) {
 	Expect(actual).To(MatchString(output.String()))
 }
 
+// testMockCallAt mirrors the `mockCallAt` helper emitted into every
+// generated mock. Tested in call_recording_test.go to verify negative-index
+// behavior independently of compiling a generated mock.
+func testMockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
+
 // extractServiceMockMethodSignatures returns the exported method signatures
 // of `ServiceMock` from a generated source, one per line, leading
 // `func (this *ServiceMock) ` stripped of its trailing `{`. Used by property

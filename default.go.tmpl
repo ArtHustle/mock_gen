@@ -6,7 +6,16 @@
 {{end}}{{range .Imports.NonStdImports}}	{{.}}
 {{end}})
 
-{{end}}{{range $iface := .Interfaces}}{{range $method := $iface.Methods}}type {{$method.CallStructName}} struct {
+{{end}}// mockCallAt returns log[i], treating negative i as an offset from the end.
+// Out-of-range indices panic (slice semantics).
+func mockCallAt[T any](log []T, i int) T {
+	if i < 0 {
+		i += len(log)
+	}
+	return log[i]
+}
+
+{{range $iface := .Interfaces}}{{range $method := $iface.Methods}}type {{$method.CallStructName}} struct {
 {{range $method.CallStructFields}}	{{.Name}} {{.Type}}
 {{end}}}
 
@@ -15,16 +24,14 @@
 	mu sync.Mutex
 {{end}}{{range $method := $iface.Methods}}
 	{{$method.CallsLogField}} []{{$method.CallStructName}}
-{{range $method.Params}}	{{.Name}} {{.Type}}
-{{end}}{{if $method.ReturnHandler}}	{{$method.ReturnHandler.FieldName}} func({{$method.ReturnHandler.ParamTypes}}) ({{$method.ReturnHandler.ReturnTypes}})
+{{if $method.ReturnHandler}}	{{$method.ReturnHandler.FieldName}} func({{$method.ReturnHandler.ParamTypes}}) ({{$method.ReturnHandler.ReturnTypes}})
 {{end}}{{range $method.Returns}}	{{.Name}} {{.Type}}
 {{end}}{{end}}}
 
 {{range $method := $iface.Methods}}func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
 {{- if and $.Options.MakeThreadSafe $method.Returns}}
 	this.mu.Lock()
-{{range $i, $param := $method.Params}}	this.{{$param.Name}} = {{index $method.Signature.ParamNames $i}}
-{{end}}	this.{{$method.CallsLogField}} = append(this.{{$method.CallsLogField}}, {{$method.CallStructName}}{ {{- range $i, $f := $method.CallStructFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
+	this.{{$method.CallsLogField}} = append(this.{{$method.CallsLogField}}, {{$method.CallStructName}}{ {{- range $i, $f := $method.CallStructFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
 {{if $method.ReturnHandler}}	handler := this.{{$method.ReturnHandler.FieldName}}
 {{end}}{{range $i, $rf := $method.Signature.ReturnFields}}	_r{{$i}} := {{$rf}}
 {{end}}	this.mu.Unlock()
@@ -37,7 +44,6 @@
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-{{end}}{{range $i, $param := $method.Params}}	this.{{$param.Name}} = {{index $method.Signature.ParamNames $i}}
 {{end}}	this.{{$method.CallsLogField}} = append(this.{{$method.CallsLogField}}, {{$method.CallStructName}}{ {{- range $i, $f := $method.CallStructFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
 {{if $method.ReturnHandler}}	if this.{{$method.ReturnHandler.FieldName}} != nil {
 		return this.{{$method.ReturnHandler.FieldName}}({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
@@ -58,17 +64,10 @@ func (this *{{$iface.MockName}}) {{$method.Getters.CallByIndex.MethodName}}(i in
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-{{end}}	return this.{{$method.Getters.CallByIndex.FieldName}}[i]
+{{end}}	return mockCallAt(this.{{$method.Getters.CallByIndex.FieldName}}, i)
 }
 
-{{range $method.Getters.ParamGetters}}func (this *{{$iface.MockName}}) {{.MethodName}}() {{.ReturnType}} {
-{{- if $.Options.MakeThreadSafe}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	return this.{{.FieldName}}
-}
-
-{{end}}{{if $method.Getters.HandlerSetter}}func (this *{{$iface.MockName}}) {{$method.Getters.HandlerSetter.MethodName}}(value {{$method.Getters.HandlerSetter.ParamType}}) {
+{{if $method.Getters.HandlerSetter}}func (this *{{$iface.MockName}}) {{$method.Getters.HandlerSetter.MethodName}}(value {{$method.Getters.HandlerSetter.ParamType}}) {
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()

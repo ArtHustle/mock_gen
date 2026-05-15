@@ -204,7 +204,6 @@ type MethodData struct {
 	CallStructFields []FieldData
 	CallsLogField    string
 	CallByIndexName  string
-	Params           []FieldData
 	ReturnHandler    *ReturnHandlerData
 	Returns          []FieldData
 	Signature        SignatureData
@@ -232,7 +231,6 @@ type SignatureData struct {
 type GetterData struct {
 	CallsGetter   GetterMethod
 	CallByIndex   *GetterMethod
-	ParamGetters  []GetterMethod
 	ReturnSetters []SetterMethod
 	HandlerSetter *SetterMethod
 }
@@ -603,7 +601,6 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 		CallsLogField:    methodLower + "_calls_log",
 		CallByIndexName:  method.Name() + "_call",
 		CallStructFields: []FieldData{},
-		Params:           []FieldData{},
 		Returns:          []FieldData{},
 	}
 
@@ -613,15 +610,6 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 		suffix := rawFieldName[len(method.Name()+"_param_"):]
 		methodData.CallStructFields = append(methodData.CallStructFields, FieldData{
 			Name: toTitle(suffix),
-			Type: this.getFieldType(param.Type()),
-		})
-	}
-
-	for j := range sig.Params().Len() {
-		param := sig.Params().At(j)
-		rawFieldName := getParamMember(method, j)
-		methodData.Params = append(methodData.Params, FieldData{
-			Name: methodLower + "_param_" + rawFieldName[len(method.Name()+"_param_"):],
 			Type: this.getFieldType(param.Type()),
 		})
 	}
@@ -710,7 +698,6 @@ func (this *generator) collectSignatureData(method *types.Func, sig *types.Signa
 
 func (this *generator) collectGetterData(method *types.Func, sig *types.Signature, callStructName, callsLogField string) *GetterData {
 	getterData := &GetterData{
-		ParamGetters:  []GetterMethod{},
 		ReturnSetters: []SetterMethod{},
 	}
 
@@ -723,20 +710,6 @@ func (this *generator) collectGetterData(method *types.Func, sig *types.Signatur
 		MethodName: method.Name() + "_call",
 		FieldName:  callsLogField,
 		ReturnType: callStructName,
-	}
-
-	for j := range sig.Params().Len() {
-		param := sig.Params().At(j)
-		fieldName := getParamMember(method, j)
-		methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
-		fieldNameLower := methodName + "_param_" + fieldName[len(method.Name()+"_param_"):]
-		parType := this.getFieldType(param.Type())
-
-		getterData.ParamGetters = append(getterData.ParamGetters, GetterMethod{
-			MethodName: fieldName,
-			FieldName:  fieldNameLower,
-			ReturnType: parType,
-		})
 	}
 
 	for j := range sig.Results().Len() {
