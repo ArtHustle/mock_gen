@@ -9,14 +9,13 @@ import (
 	. "github.com/ArtHustle/mock_gen"
 )
 
-// Call recording is the per-method log of recorded arguments. It is generated
-// under --method-api (and therefore also under --thread-safe). Generated
+// Call recording is the per-method log of recorded arguments. Generated
 // artifacts (struct, log field, getter, indexer, Reset_history) are exercised
 // by the literal-output entries in method_api_test.go and concurrency_test.go.
 //
-// This file covers what those literal entries cannot: behaviors that are
-// observed by *negation*, by *ordering*, or that depend on edge-case param
-// shapes that don't appear in the canonical entries.
+// This file covers what those literal entries cannot: behaviors observed by
+// *negation*, by *ordering*, or that depend on edge-case param shapes that
+// don't appear in the canonical entries.
 var _ = Describe("Call recording", func() {
 
 	// --- recorded-struct field naming for edge-case param shapes ---
@@ -27,7 +26,7 @@ var _ = Describe("Call recording", func() {
 
 	DescribeTable("recorded-struct field naming",
 		func(source, expectedStruct string) {
-			result, err := GenerateMockContentWithOptions(source, Options{MethodAPI: true})
+			result, err := GenerateMockContentWithOptions(source, Options{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(ContainSubstring(expectedStruct))
 		},
@@ -84,7 +83,7 @@ package pkg
 
 type Service interface {
 	Send(x int) error
-}`, Options{MethodAPI: true, GenerateReturnHandler: true})
+}`, Options{GenerateReturnHandler: true})
 		Expect(err).NotTo(HaveOccurred())
 
 		body := result[strings.Index(result, "func (this *ServiceMock) Send("):]
@@ -129,7 +128,7 @@ package pkg
 
 type Service interface {
 	Send(x int) error
-}`, Options{MethodAPI: true, GenerateReturnHandler: true})
+}`, Options{GenerateReturnHandler: true})
 		Expect(err).NotTo(HaveOccurred())
 
 		reset := result[strings.Index(result, "func (this *ServiceMock) Reset_history()"):]
@@ -139,23 +138,6 @@ type Service interface {
 			"Reset_history must not clear the installed handler")
 		Expect(reset).NotTo(ContainSubstring("this.send_return_error ="),
 			"Reset_history must not clear armed static return values")
-	})
-
-	// --- legacy field-API: call recording must stay off, as a hard guarantee ---
-
-	It("legacy field-API does not emit any call-log machinery", func() {
-		result, err := GenerateMockContentWithOptions(`
-package pkg
-
-type Service interface {
-	Send(x int)
-}`, Options{})
-		Expect(err).NotTo(HaveOccurred())
-
-		Expect(result).NotTo(ContainSubstring("_Call"))
-		Expect(result).NotTo(ContainSubstring("_calls_log"))
-		Expect(result).NotTo(ContainSubstring("Reset_history"))
-		Expect(result).NotTo(ContainSubstring("Send_call("))
 	})
 
 	// --- cross-mock uniqueness: two interfaces in one source must produce
@@ -172,7 +154,7 @@ type A interface {
 
 type B interface {
 	Send(x string)
-}`, Options{MethodAPI: true})
+}`, Options{})
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(result).To(ContainSubstring("type AMock_Send_Call struct {\n\tX int\n}"))

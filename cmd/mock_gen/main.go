@@ -40,7 +40,6 @@ func main() {
 	var templateFile string
 	var generateReturnHandler bool
 	var threadSafe bool
-	var methodAPI bool
 	var noHeaderNote bool
 
 	var rootCmd = &cobra.Command{
@@ -73,7 +72,6 @@ Examples:
 			mockContent, e := mock_gen.GenerateMockFileWithOptions(inputFilePath, mock_gen.Options{
 				GenerateReturnHandler: generateReturnHandler,
 				MakeThreadSafe:        threadSafe,
-				MethodAPI:             methodAPI,
 				AddHeaderNote:         !noHeaderNote,
 				CustomTemplate:        customTemplate,
 			})
@@ -100,11 +98,6 @@ Examples:
 		"If set, generates a single return handler field (e.g., Method_return func(...)), and ignores other return value fields. If the handler is provided, other return values (like Method_return_error) will be ignored.")
 	rootCmd.Flags().BoolVar(&threadSafe, "thread-safe", false,
 		"If set, adds a mutex to the mock struct and uses it to make all methods thread-safe")
-	rootCmd.Flags().BoolVar(&methodAPI, "method-api", false,
-		"If set, exposes mock fields via getter/setter methods instead of public fields. "+
-			"Implied by --thread-safe. Use this without --thread-safe to write tests against "+
-			"the same API shape as thread-safe mocks (no mutex), making it painless to flip "+
-			"--thread-safe on later without rewriting tests.")
 	rootCmd.Flags().BoolVar(&noHeaderNote, "no-header-note", false,
 		"If set, skips adding the 'Code generated' header comment to the generated file")
 

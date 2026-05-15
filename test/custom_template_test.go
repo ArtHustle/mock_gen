@@ -35,7 +35,7 @@ type Repository interface {
 `,
 			Options{}),
 
-		Entry("custom template with struct generation", `
+		Entry("custom template referencing CallsLogField", `
 package pkg
 
 type Service interface {
@@ -44,13 +44,13 @@ type Service interface {
 			`package test
 
 {{range .Interfaces}}type {{.MockName}} struct {
-{{range .Methods}}	{{.CallsField}} int
+{{range .Methods}}	{{.CallsLogField}} int
 {{end}}}
 {{end}}`,
 			`package test
 
 type ServiceMock struct {
-	Add_calls int
+	add_calls_log int
 }
 `,
 			Options{}),
@@ -70,8 +70,8 @@ type Service interface {
 			`package test
 
 type ServiceMock struct {
-	Add_param_one int
-	Add_param_two string
+	add_param_one int
+	add_param_two string
 }
 `,
 			Options{}),
@@ -91,8 +91,8 @@ type Service interface {
 			`package test
 
 type ServiceMock struct {
-	Add_return_string string
-	Add_return_error  error
+	add_return_string string
+	add_return_error  error
 }
 `,
 			Options{}),
@@ -147,7 +147,7 @@ type Dummy struct{}
 // Params: one int, two string
 // Returns: (bool, error)
 // ParamNames: one, two
-// ReturnFields: this.Add_return_bool, this.Add_return_error
+// ReturnFields: this.add_return_bool, this.add_return_error
 
 type Dummy struct{}
 `,
@@ -166,18 +166,18 @@ type Repository interface {
 			`package test
 
 {{range .Interfaces}}type {{.MockName}} struct {
-{{range .Methods}}	{{.CallsField}} int
+{{range .Methods}}	{{.CallsLogField}} int
 {{end}}}
 
 {{end}}`,
 			`package test
 
 type ServiceMock struct {
-	Add_calls int
+	add_calls_log int
 }
 
 type RepositoryMock struct {
-	Get_calls int
+	get_calls_log int
 }
 `,
 			Options{}),
@@ -361,13 +361,13 @@ type Service interface {
 
 type ServiceMock struct {
 	AddCalled  bool
-	Add_return func(int) (string, error)
+	add_return func(int) (string, error)
 }
 
 func (this *ServiceMock) Add(one int) (string, error) {
 	this.AddCalled = true
-	if this.Add_return != nil {
-		return this.Add_return(one)
+	if this.add_return != nil {
+		return this.add_return(one)
 	}
 	var zeroAdd1 string
 	var zeroAdd2 error
@@ -400,7 +400,8 @@ import (
 )
 
 {{range $iface := .Interfaces}}{{range $method := $iface.Methods}}// Method {{$method.Name}}:
-//   CallsField: {{$method.CallsField}}
+//   CallsLogField: {{$method.CallsLogField}}
+//   CallStructName: {{$method.CallStructName}}
 //   Params: {{range .Params}}{{.Name}}:{{.Type}} {{end}}
 //   Returns: {{range .Returns}}{{.Name}}:{{.Type}} {{end}}
 {{end}}{{end}}
@@ -414,9 +415,10 @@ import (
 )
 
 // Method Process:
-//   CallsField: Process_calls
-//   Params: Process_param_ctx:context.Context Process_param_data:string
-//   Returns: Process_return_int:int Process_return_error:error
+//   CallsLogField: process_calls_log
+//   CallStructName: ServiceMock_Process_Call
+//   Params: process_param_ctx:context.Context process_param_data:string
+//   Returns: process_return_int:int process_return_error:error
 
 type Stub struct{}
 `
@@ -444,11 +446,12 @@ import (
 
 {{range $iface := .Interfaces}}type {{$iface.MockName}} struct {
 	mu sync.Mutex
-{{range $method := $iface.Methods}}	{{$method.CallsField}} int
+{{range $method := $iface.Methods}}	{{$method.CallsLogField}} int
 {{end}}}
 
 {{range $method := $iface.Methods}}{{if $method.Getters}}// Getters for {{$method.Name}}:
 //   CallsGetter: {{$method.Getters.CallsGetter.MethodName}}() {{$method.Getters.CallsGetter.ReturnType}}
+//   CallByIndex: {{$method.Getters.CallByIndex.MethodName}}(i int) {{$method.Getters.CallByIndex.ReturnType}}
 {{range $method.Getters.ParamGetters}}//   ParamGetter: {{.MethodName}}() {{.ReturnType}}
 {{end}}{{range $method.Getters.ReturnSetters}}//   ReturnSetter: {{.MethodName}}({{.ParamType}})
 {{end}}{{end}}{{end}}{{end}}
@@ -462,12 +465,13 @@ import (
 )
 
 type ServiceMock struct {
-	mu        sync.Mutex
-	add_calls int
+	mu            sync.Mutex
+	add_calls_log int
 }
 
 // Getters for Add:
 //   CallsGetter: Add_calls() []ServiceMock_Add_Call
+//   CallByIndex: Add_call(i int) ServiceMock_Add_Call
 //   ParamGetter: Add_param_one() int
 //   ReturnSetter: Add_return_string(string)
 
@@ -722,7 +726,7 @@ type ServiceMock struct {
 			expectedWith := `package test
 
 type ServiceMock struct {
-	Add_return func(int) string
+	add_return func(int) string
 }
 `
 
@@ -776,8 +780,8 @@ type ServiceMockCall struct {
 
 type ServiceMock struct {
 	Calls               []ServiceMockCall
-	Add_return_int      int
-	Multiply_return_int int
+	add_return_int      int
+	multiply_return_int int
 }
 
 func (this *ServiceMock) Add(a, b int) int {
@@ -785,7 +789,7 @@ func (this *ServiceMock) Add(a, b int) int {
 		Method: "Add",
 		Args:   []any{a, b},
 	})
-	return this.Add_return_int
+	return this.add_return_int
 }
 
 func (this *ServiceMock) Multiply(a, b int) int {
@@ -793,7 +797,7 @@ func (this *ServiceMock) Multiply(a, b int) int {
 		Method: "Multiply",
 		Args:   []any{a, b},
 	})
-	return this.Multiply_return_int
+	return this.multiply_return_int
 }
 `
 
@@ -985,7 +989,9 @@ type Service interface { Add(one int) string }`
 
 			customTemplate := `package test
 {{range .Interfaces}}{{range .Methods}}// Name: {{.Name}}
-// CallsField: {{.CallsField}}
+// CallStructName: {{.CallStructName}}
+// CallsLogField: {{.CallsLogField}}
+// CallByIndexName: {{.CallByIndexName}}
 {{end}}{{end}}
 type Stub struct{}`
 
@@ -994,7 +1000,9 @@ type Stub struct{}`
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(actual).To(ContainSubstring("Name: Add"))
-			Expect(actual).To(ContainSubstring("CallsField: Add_calls"))
+			Expect(actual).To(ContainSubstring("CallStructName: ServiceMock_Add_Call"))
+			Expect(actual).To(ContainSubstring("CallsLogField: add_calls_log"))
+			Expect(actual).To(ContainSubstring("CallByIndexName: Add_call"))
 		})
 
 		It("should access ReturnHandlerData fields when enabled", func() {
@@ -1013,7 +1021,7 @@ type Stub struct{}`
 				GenerateReturnHandler: true,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(actual).To(ContainSubstring("FieldName: Add_return"))
+			Expect(actual).To(ContainSubstring("FieldName: add_return"))
 			Expect(actual).To(ContainSubstring("ParamTypes: int"))
 			Expect(actual).To(ContainSubstring("ReturnTypes: string"))
 		})

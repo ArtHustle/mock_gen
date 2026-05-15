@@ -4,49 +4,17 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-// Default-flag generation: no Options are set. Covers signature shapes,
-// type rendering (slices, channels, pointers, generics, aliases), package
-// import handling, multi-interface files, and embedded interfaces.
-var _ = Describe("Default generation", func() {
+// Default-flag generation: no Options are set. Method-API (unexported fields,
+// accessor methods, per-method call log) is always on. This file covers cases
+// not already exercised by method_api_test.go: edge cases in param/return
+// naming, type rendering (slices, channels, generics, aliases), package import
+// handling, multi-interface files, and embedded interfaces.
+var _ = Describe("Default generation — edge cases", func() {
 	DescribeTable("emits the expected mock",
 		runGenEntry,
 
 		// --- signature shapes ---
 
-		Entry("no params, no return", `
-package pkg
-
-type Service interface {
-	Add()
-}`,
-			`package test
-
-type ServiceMock struct {
-	Add_calls int
-}
-
-func (this *ServiceMock) Add() {
-	this.Add_calls++
-}
-`),
-		Entry("1 param, no return", `
-package pkg
-
-type Service interface {
-	Add(one int)
-}`,
-			`package test
-
-type ServiceMock struct {
-	Add_calls     int
-	Add_param_one int
-}
-
-func (this *ServiceMock) Add(one int) {
-	this.Add_calls++
-	this.Add_param_one = one
-}
-`),
 		Entry("2 params of different types, no return", `
 package pkg
 
@@ -55,19 +23,47 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	One int
+	Two string
+}
+
 type ServiceMock struct {
-	Add_calls     int
-	Add_param_one int
-	Add_param_two string
+	add_calls_log []ServiceMock_Add_Call
+	add_param_one int
+	add_param_two string
 }
 
 func (this *ServiceMock) Add(one int, two string) {
-	this.Add_calls++
-	this.Add_param_one = one
-	this.Add_param_two = two
+	this.add_param_one = one
+	this.add_param_two = two
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one, Two: two})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_one() int {
+	return this.add_param_one
+}
+
+func (this *ServiceMock) Add_param_two() string {
+	return this.add_param_two
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("2 params of same type, no return", `
+
+		Entry("2 params of same type compact in signature", `
 package pkg
 
 type Service interface {
@@ -75,39 +71,47 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	One float32
+	Two float32
+}
+
 type ServiceMock struct {
-	Add_calls     int
-	Add_param_one float32
-	Add_param_two float32
+	add_calls_log []ServiceMock_Add_Call
+	add_param_one float32
+	add_param_two float32
 }
 
 func (this *ServiceMock) Add(one, two float32) {
-	this.Add_calls++
-	this.Add_param_one = one
-	this.Add_param_two = two
+	this.add_param_one = one
+	this.add_param_two = two
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one, Two: two})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_one() float32 {
+	return this.add_param_one
+}
+
+func (this *ServiceMock) Add_param_two() float32 {
+	return this.add_param_two
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("1 param, 1 return", `
-package pkg
 
-type Service interface {
-	Add(one int) string
-}`,
-			`package test
-
-type ServiceMock struct {
-	Add_calls         int
-	Add_param_one     int
-	Add_return_string string
-}
-
-func (this *ServiceMock) Add(one int) string {
-	this.Add_calls++
-	this.Add_param_one = one
-	return this.Add_return_string
-}
-`),
-		Entry("1 named return", `
+		Entry("single named return", `
 package pkg
 
 type Service interface {
@@ -115,17 +119,39 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+}
+
 type ServiceMock struct {
-	Add_calls       int
-	Add_return_name string
+	add_calls_log   []ServiceMock_Add_Call
+	add_return_name string
 }
 
 func (this *ServiceMock) Add() (name string) {
-	this.Add_calls++
-	return this.Add_return_name
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+	return this.add_return_name
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_return_name(value string) {
+	this.add_return_name = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("2 named returns", `
+
+		Entry("two named returns", `
 package pkg
 
 type Service interface {
@@ -133,56 +159,44 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+}
+
 type ServiceMock struct {
-	Add_calls       int
-	Add_return_name string
-	Add_return_e    error
+	add_calls_log   []ServiceMock_Add_Call
+	add_return_name string
+	add_return_e    error
 }
 
 func (this *ServiceMock) Add() (name string, e error) {
-	this.Add_calls++
-	return this.Add_return_name, this.Add_return_e
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+	return this.add_return_name, this.add_return_e
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_return_name(value string) {
+	this.add_return_name = value
+}
+
+func (this *ServiceMock) Add_return_e(value error) {
+	this.add_return_e = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("anonymous returns disambiguated by type repetition", `
-package pkg
 
-type Service interface {
-	Add() (int, string, int)
-}`,
-			`package test
-
-type ServiceMock struct {
-	Add_calls         int
-	Add_return_int1   int
-	Add_return_string string
-	Add_return_int2   int
-}
-
-func (this *ServiceMock) Add() (int, string, int) {
-	this.Add_calls++
-	return this.Add_return_int1, this.Add_return_string, this.Add_return_int2
-}
-`),
-		Entry("anonymous param gets a generated name", `
-package pkg
-
-type Service interface {
-	Add(int)
-}`,
-			`package test
-
-type ServiceMock struct {
-	Add_calls     int
-	Add_param_int int
-}
-
-func (this *ServiceMock) Add(param int) {
-	this.Add_calls++
-	this.Add_param_int = param
-}
-`),
-		Entry("2 anonymous params get sequential names", `
+		Entry("two anonymous params of different types get sequential param names", `
 package pkg
 
 type Service interface {
@@ -190,20 +204,97 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	Int    int
+	String string
+}
+
 type ServiceMock struct {
-	Add_calls        int
-	Add_param_int    int
-	Add_param_string string
+	add_calls_log    []ServiceMock_Add_Call
+	add_param_int    int
+	add_param_string string
 }
 
 func (this *ServiceMock) Add(param1 int, param2 string) {
-	this.Add_calls++
-	this.Add_param_int = param1
-	this.Add_param_string = param2
+	this.add_param_int = param1
+	this.add_param_string = param2
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{Int: param1, String: param2})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_int() int {
+	return this.add_param_int
+}
+
+func (this *ServiceMock) Add_param_string() string {
+	return this.add_param_string
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
 
-		// --- slices, pointers, channels ---
+		Entry("anonymous returns of same type get numeric suffixes", `
+package pkg
+
+type Service interface {
+	Add() (int, string, int)
+}`,
+			`package test
+
+type ServiceMock_Add_Call struct {
+}
+
+type ServiceMock struct {
+	add_calls_log     []ServiceMock_Add_Call
+	add_return_int1   int
+	add_return_string string
+	add_return_int2   int
+}
+
+func (this *ServiceMock) Add() (int, string, int) {
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+	return this.add_return_int1, this.add_return_string, this.add_return_int2
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_return_int1(value int) {
+	this.add_return_int1 = value
+}
+
+func (this *ServiceMock) Add_return_string(value string) {
+	this.add_return_string = value
+}
+
+func (this *ServiceMock) Add_return_int2(value int) {
+	this.add_return_int2 = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
+}
+`),
+
+		// --- slices, channels, variadic ---
 
 		Entry("anonymous slice param", `
 package pkg
@@ -213,17 +304,40 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	IntArr []int
+}
+
 type ServiceMock struct {
-	Add_calls        int
-	Add_param_intArr []int
+	add_calls_log    []ServiceMock_Add_Call
+	add_param_intArr []int
 }
 
 func (this *ServiceMock) Add(param []int) {
-	this.Add_calls++
-	this.Add_param_intArr = param
+	this.add_param_intArr = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{IntArr: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_intArr() []int {
+	return this.add_param_intArr
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("anonymous slice-of-pointers param", `
+
+		Entry("slice of pointers as param", `
 package pkg
 
 type Service interface {
@@ -231,17 +345,40 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	IntArr []*int
+}
+
 type ServiceMock struct {
-	Add_calls        int
-	Add_param_intArr []*int
+	add_calls_log    []ServiceMock_Add_Call
+	add_param_intArr []*int
 }
 
 func (this *ServiceMock) Add(param []*int) {
-	this.Add_calls++
-	this.Add_param_intArr = param
+	this.add_param_intArr = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{IntArr: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_intArr() []*int {
+	return this.add_param_intArr
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("variadic param (anonymous)", `
+
+		Entry("anonymous variadic param", `
 package pkg
 
 type Service interface {
@@ -249,34 +386,39 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	IntArr []int
+}
+
 type ServiceMock struct {
-	Add_calls        int
-	Add_param_intArr []int
+	add_calls_log    []ServiceMock_Add_Call
+	add_param_intArr []int
 }
 
 func (this *ServiceMock) Add(param ...int) {
-	this.Add_calls++
-	this.Add_param_intArr = param
+	this.add_param_intArr = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{IntArr: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_intArr() []int {
+	return this.add_param_intArr
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("variadic param (named)", `
-package pkg
 
-type Service interface {
-	Add(values ...int)
-}`,
-			`package test
-
-type ServiceMock struct {
-	Add_calls        int
-	Add_param_values []int
-}
-
-func (this *ServiceMock) Add(values ...int) {
-	this.Add_calls++
-	this.Add_param_values = values
-}
-`),
 		Entry("receive-only channel return", `
 package pkg
 
@@ -285,34 +427,38 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Listen_Call struct {
+}
+
 type ServiceMock struct {
-	Listen_calls             int
-	Listen_return_chanString <-chan string
+	listen_calls_log         []ServiceMock_Listen_Call
+	listen_return_chanString <-chan string
 }
 
 func (this *ServiceMock) Listen() <-chan string {
-	this.Listen_calls++
-	return this.Listen_return_chanString
+	this.listen_calls_log = append(this.listen_calls_log, ServiceMock_Listen_Call{})
+	return this.listen_return_chanString
+}
+
+func (this *ServiceMock) Listen_calls() []ServiceMock_Listen_Call {
+	out := make([]ServiceMock_Listen_Call, len(this.listen_calls_log))
+	copy(out, this.listen_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Listen_call(i int) ServiceMock_Listen_Call {
+	return this.listen_calls_log[i]
+}
+
+func (this *ServiceMock) Listen_return_chanString(value <-chan string) {
+	this.listen_return_chanString = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.listen_calls_log = nil
 }
 `),
-		Entry("send-only channel param", `
-package pkg
 
-type Service interface {
-	Send(chan<- int)
-}`,
-			`package test
-
-type ServiceMock struct {
-	Send_calls         int
-	Send_param_chanInt chan<- int
-}
-
-func (this *ServiceMock) Send(param chan<- int) {
-	this.Send_calls++
-	this.Send_param_chanInt = param
-}
-`),
 		Entry("bidirectional channel return", `
 package pkg
 
@@ -321,17 +467,39 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Stream_Call struct {
+}
+
 type ServiceMock struct {
-	Stream_calls             int
-	Stream_return_chanString chan string
+	stream_calls_log         []ServiceMock_Stream_Call
+	stream_return_chanString chan string
 }
 
 func (this *ServiceMock) Stream() chan string {
-	this.Stream_calls++
-	return this.Stream_return_chanString
+	this.stream_calls_log = append(this.stream_calls_log, ServiceMock_Stream_Call{})
+	return this.stream_return_chanString
+}
+
+func (this *ServiceMock) Stream_calls() []ServiceMock_Stream_Call {
+	out := make([]ServiceMock_Stream_Call, len(this.stream_calls_log))
+	copy(out, this.stream_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Stream_call(i int) ServiceMock_Stream_Call {
+	return this.stream_calls_log[i]
+}
+
+func (this *ServiceMock) Stream_return_chanString(value chan string) {
+	this.stream_return_chanString = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.stream_calls_log = nil
 }
 `),
-		Entry("channel of imported type", `
+
+		Entry("channel of imported pointer type", `
 package pkg
 
 import "net/http"
@@ -345,20 +513,41 @@ import (
 	"net/http"
 )
 
+type ServiceMock_Listen_Call struct {
+}
+
 type ServiceMock struct {
-	Listen_calls              int
-	Listen_return_chanRequest <-chan *http.Request
+	listen_calls_log          []ServiceMock_Listen_Call
+	listen_return_chanRequest <-chan *http.Request
 }
 
 func (this *ServiceMock) Listen() <-chan *http.Request {
-	this.Listen_calls++
-	return this.Listen_return_chanRequest
+	this.listen_calls_log = append(this.listen_calls_log, ServiceMock_Listen_Call{})
+	return this.listen_return_chanRequest
+}
+
+func (this *ServiceMock) Listen_calls() []ServiceMock_Listen_Call {
+	out := make([]ServiceMock_Listen_Call, len(this.listen_calls_log))
+	copy(out, this.listen_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Listen_call(i int) ServiceMock_Listen_Call {
+	return this.listen_calls_log[i]
+}
+
+func (this *ServiceMock) Listen_return_chanRequest(value <-chan *http.Request) {
+	this.listen_return_chanRequest = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.listen_calls_log = nil
 }
 `),
 
-		// --- imported types ---
+		// --- imported types in slices ---
 
-		Entry("slice of imported struct as param", `
+		Entry("slice of imported struct pointer as param", `
 package pkg
 
 import "net/http"
@@ -372,17 +561,40 @@ import (
 	"net/http"
 )
 
+type ServiceMock_Add_Call struct {
+	RequestArr []*http.Request
+}
+
 type ServiceMock struct {
-	Add_calls            int
-	Add_param_requestArr []*http.Request
+	add_calls_log        []ServiceMock_Add_Call
+	add_param_requestArr []*http.Request
 }
 
 func (this *ServiceMock) Add(param []*http.Request) {
-	this.Add_calls++
-	this.Add_param_requestArr = param
+	this.add_param_requestArr = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{RequestArr: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_requestArr() []*http.Request {
+	return this.add_param_requestArr
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("slice of imported struct as return", `
+
+		Entry("slice of imported struct pointer as return", `
 package pkg
 
 import "io"
@@ -396,64 +608,38 @@ import (
 	"io"
 )
 
+type ServiceMock_Add_Call struct {
+}
+
 type ServiceMock struct {
-	Add_calls                int
-	Add_return_pipeReaderArr []*io.PipeReader
+	add_calls_log            []ServiceMock_Add_Call
+	add_return_pipeReaderArr []*io.PipeReader
 }
 
 func (this *ServiceMock) Add() []*io.PipeReader {
-	this.Add_calls++
-	return this.Add_return_pipeReaderArr
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+	return this.add_return_pipeReaderArr
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_return_pipeReaderArr(value []*io.PipeReader) {
+	this.add_return_pipeReaderArr = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("imported struct pointer as param", `
-package pkg
 
-import "io"
-
-type Service interface {
-	Add(*io.PipeReader)
-}`,
-			`package test
-
-import (
-	"io"
-)
-
-type ServiceMock struct {
-	Add_calls            int
-	Add_param_pipeReader *io.PipeReader
-}
-
-func (this *ServiceMock) Add(param *io.PipeReader) {
-	this.Add_calls++
-	this.Add_param_pipeReader = param
-}
-`),
-		Entry("imported struct pointer as return", `
-package pkg
-
-import "net/http"
-
-type Service interface {
-	Add() *http.Request
-}`,
-			`package test
-
-import (
-	"net/http"
-)
-
-type ServiceMock struct {
-	Add_calls          int
-	Add_return_request *http.Request
-}
-
-func (this *ServiceMock) Add() *http.Request {
-	this.Add_calls++
-	return this.Add_return_request
-}
-`),
 		Entry("slice of imported package type as return", `
 package pkg
 
@@ -470,20 +656,41 @@ import (
 	"github.com/ArtHustle/mock_gen/test/dummy/a/model"
 )
 
+type ServiceMock_Add_Call struct {
+}
+
 type ServiceMock struct {
-	Add_calls       int
-	Add_return_aArr []model.A
+	add_calls_log   []ServiceMock_Add_Call
+	add_return_aArr []model.A
 }
 
 func (this *ServiceMock) Add() []model.A {
-	this.Add_calls++
-	return this.Add_return_aArr
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+	return this.add_return_aArr
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_return_aArr(value []model.A) {
+	this.add_return_aArr = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
 
 		// --- multi-interface ---
 
-		Entry("multiple interfaces in one file", `
+		Entry("multiple interfaces in one file produce separate mocks", `
 package pkg
 
 type Service interface {
@@ -495,24 +702,58 @@ type Service2 interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+}
+
 type ServiceMock struct {
-	Add_calls int
+	add_calls_log []ServiceMock_Add_Call
 }
 
 func (this *ServiceMock) Add() {
-	this.Add_calls++
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
+}
+
+type Service2Mock_Sub_Call struct {
 }
 
 type Service2Mock struct {
-	Sub_calls int
+	sub_calls_log []Service2Mock_Sub_Call
 }
 
 func (this *Service2Mock) Sub() {
-	this.Sub_calls++
+	this.sub_calls_log = append(this.sub_calls_log, Service2Mock_Sub_Call{})
+}
+
+func (this *Service2Mock) Sub_calls() []Service2Mock_Sub_Call {
+	out := make([]Service2Mock_Sub_Call, len(this.sub_calls_log))
+	copy(out, this.sub_calls_log)
+	return out
+}
+
+func (this *Service2Mock) Sub_call(i int) Service2Mock_Sub_Call {
+	return this.sub_calls_log[i]
+}
+
+func (this *Service2Mock) Reset_history() {
+	this.sub_calls_log = nil
 }
 `),
 
-		// --- same-package types ---
+		// --- same-package types use mock_gen import alias ---
 
 		Entry("struct defined in the source package", `
 package pkg
@@ -529,22 +770,48 @@ import (
 	"mock_gen"
 )
 
+type ServiceMock_Add_Call struct {
+	MyParam mock_gen.MyParam
+}
+
 type ServiceMock struct {
-	Add_calls           int
-	Add_param_myParam   mock_gen.MyParam
-	Add_return_myReturn mock_gen.MyReturn
+	add_calls_log       []ServiceMock_Add_Call
+	add_param_myParam   mock_gen.MyParam
+	add_return_myReturn mock_gen.MyReturn
 }
 
 func (this *ServiceMock) Add(param mock_gen.MyParam) mock_gen.MyReturn {
-	this.Add_calls++
-	this.Add_param_myParam = param
-	return this.Add_return_myReturn
+	this.add_param_myParam = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{MyParam: param})
+	return this.add_return_myReturn
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_myParam() mock_gen.MyParam {
+	return this.add_param_myParam
+}
+
+func (this *ServiceMock) Add_return_myReturn(value mock_gen.MyReturn) {
+	this.add_return_myReturn = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
 
 		// --- aliases ---
 
-		Entry("alias to type from another package", `
+		Entry("local alias to imported type", `
 package pkg
 
 import "github.com/ArtHustle/mock_gen/test/dummy"
@@ -561,19 +828,46 @@ import (
 	"mock_gen"
 )
 
+type ServiceMock_Add_Call struct {
+	MyID mock_gen.MyID
+}
+
 type ServiceMock struct {
-	Add_calls       int
-	Add_param_myID  mock_gen.MyID
-	Add_return_myID mock_gen.MyID
+	add_calls_log   []ServiceMock_Add_Call
+	add_param_myID  mock_gen.MyID
+	add_return_myID mock_gen.MyID
 }
 
 func (this *ServiceMock) Add(param mock_gen.MyID) mock_gen.MyID {
-	this.Add_calls++
-	this.Add_param_myID = param
-	return this.Add_return_myID
+	this.add_param_myID = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{MyID: param})
+	return this.add_return_myID
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_myID() mock_gen.MyID {
+	return this.add_param_myID
+}
+
+func (this *ServiceMock) Add_return_myID(value mock_gen.MyID) {
+	this.add_return_myID = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("alias from imported package, used as param and return", `
+
+		Entry("alias used directly from imported package", `
 package pkg
 
 import "github.com/ArtHustle/mock_gen/test/dummy"
@@ -588,19 +882,46 @@ import (
 	"github.com/ArtHustle/mock_gen/test/dummy"
 )
 
+type ServiceMock_Get_Call struct {
+	IntAlias dummy.IntAlias
+}
+
 type ServiceMock struct {
-	Get_calls           int
-	Get_param_intAlias  dummy.IntAlias
-	Get_return_intAlias dummy.IntAlias
+	get_calls_log       []ServiceMock_Get_Call
+	get_param_intAlias  dummy.IntAlias
+	get_return_intAlias dummy.IntAlias
 }
 
 func (this *ServiceMock) Get(param dummy.IntAlias) dummy.IntAlias {
-	this.Get_calls++
-	this.Get_param_intAlias = param
-	return this.Get_return_intAlias
+	this.get_param_intAlias = param
+	this.get_calls_log = append(this.get_calls_log, ServiceMock_Get_Call{IntAlias: param})
+	return this.get_return_intAlias
+}
+
+func (this *ServiceMock) Get_calls() []ServiceMock_Get_Call {
+	out := make([]ServiceMock_Get_Call, len(this.get_calls_log))
+	copy(out, this.get_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Get_call(i int) ServiceMock_Get_Call {
+	return this.get_calls_log[i]
+}
+
+func (this *ServiceMock) Get_param_intAlias() dummy.IntAlias {
+	return this.get_param_intAlias
+}
+
+func (this *ServiceMock) Get_return_intAlias(value dummy.IntAlias) {
+	this.get_return_intAlias = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.get_calls_log = nil
 }
 `),
-		Entry("multiple params/returns of same alias type", `
+
+		Entry("repeated alias gets numeric suffix in field name", `
 package pkg
 
 type MyID = int
@@ -615,25 +936,60 @@ import (
 	"mock_gen"
 )
 
+type ServiceMock_Add_Call struct {
+	MyID1 mock_gen.MyID
+	MyID2 mock_gen.MyID
+}
+
 type ServiceMock struct {
-	Add_calls        int
-	Add_param_myID1  mock_gen.MyID
-	Add_param_myID2  mock_gen.MyID
-	Add_return_myID  mock_gen.MyID
-	Add_return_error error
+	add_calls_log    []ServiceMock_Add_Call
+	add_param_myID1  mock_gen.MyID
+	add_param_myID2  mock_gen.MyID
+	add_return_myID  mock_gen.MyID
+	add_return_error error
 }
 
 func (this *ServiceMock) Add(param1, param2 mock_gen.MyID) (mock_gen.MyID, error) {
-	this.Add_calls++
-	this.Add_param_myID1 = param1
-	this.Add_param_myID2 = param2
-	return this.Add_return_myID, this.Add_return_error
+	this.add_param_myID1 = param1
+	this.add_param_myID2 = param2
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{MyID1: param1, MyID2: param2})
+	return this.add_return_myID, this.add_return_error
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_myID1() mock_gen.MyID {
+	return this.add_param_myID1
+}
+
+func (this *ServiceMock) Add_param_myID2() mock_gen.MyID {
+	return this.add_param_myID2
+}
+
+func (this *ServiceMock) Add_return_myID(value mock_gen.MyID) {
+	this.add_return_myID = value
+}
+
+func (this *ServiceMock) Add_return_error(value error) {
+	this.add_return_error = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
 
 		// --- generics ---
 
-		Entry("generic with multiple type params", `
+		Entry("generic type with two type params", `
 package pkg
 
 type gen[T1, T2 any] struct {}
@@ -649,17 +1005,40 @@ import (
 	"mock_gen"
 )
 
+type ServiceMock_Add_Call struct {
+	GenAmountInt mock_gen.gen[mock_gen.amount, int]
+}
+
 type ServiceMock struct {
-	Add_calls              int
-	Add_param_genAmountInt mock_gen.gen[mock_gen.amount, int]
+	add_calls_log          []ServiceMock_Add_Call
+	add_param_genAmountInt mock_gen.gen[mock_gen.amount, int]
 }
 
 func (this *ServiceMock) Add(param mock_gen.gen[mock_gen.amount, int]) {
-	this.Add_calls++
-	this.Add_param_genAmountInt = param
+	this.add_param_genAmountInt = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{GenAmountInt: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_genAmountInt() mock_gen.gen[mock_gen.amount, int] {
+	return this.add_param_genAmountInt
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("generic containing a slice of generics", `
+
+		Entry("generic instantiated with a slice of generics", `
 package pkg
 
 type gen[T any] struct {}
@@ -673,17 +1052,40 @@ import (
 	"mock_gen"
 )
 
+type ServiceMock_Add_Call struct {
+	GenGenInt mock_gen.gen[[]mock_gen.gen[int]]
+}
+
 type ServiceMock struct {
-	Add_calls           int
-	Add_param_genGenInt mock_gen.gen[[]mock_gen.gen[int]]
+	add_calls_log       []ServiceMock_Add_Call
+	add_param_genGenInt mock_gen.gen[[]mock_gen.gen[int]]
 }
 
 func (this *ServiceMock) Add(param mock_gen.gen[[]mock_gen.gen[int]]) {
-	this.Add_calls++
-	this.Add_param_genGenInt = param
+	this.add_param_genGenInt = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{GenGenInt: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_genGenInt() mock_gen.gen[[]mock_gen.gen[int]] {
+	return this.add_param_genGenInt
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("generic containing a packaged type", `
+
+		Entry("nested generic instantiated with an imported type", `
 package pkg
 
 import "io"
@@ -701,43 +1103,39 @@ import (
 	"mock_gen"
 )
 
+type ServiceMock_Add_Call struct {
+	GenGenCloser mock_gen.gen[mock_gen.gen[io.Closer]]
+}
+
 type ServiceMock struct {
-	Add_calls              int
-	Add_param_genGenCloser mock_gen.gen[mock_gen.gen[io.Closer]]
+	add_calls_log          []ServiceMock_Add_Call
+	add_param_genGenCloser mock_gen.gen[mock_gen.gen[io.Closer]]
 }
 
 func (this *ServiceMock) Add(param mock_gen.gen[mock_gen.gen[io.Closer]]) {
-	this.Add_calls++
-	this.Add_param_genGenCloser = param
+	this.add_param_genGenCloser = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{GenGenCloser: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_genGenCloser() mock_gen.gen[mock_gen.gen[io.Closer]] {
+	return this.add_param_genGenCloser
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("generic as param and return", `
-package pkg
 
-type Option[T any] struct{}
-
-type Service interface {
-	Get(Option[int]) Option[string]
-}
-`,
-			`package test
-
-import (
-	"mock_gen"
-)
-
-type ServiceMock struct {
-	Get_calls               int
-	Get_param_optionInt     mock_gen.Option[int]
-	Get_return_optionString mock_gen.Option[string]
-}
-
-func (this *ServiceMock) Get(param mock_gen.Option[int]) mock_gen.Option[string] {
-	this.Get_calls++
-	this.Get_param_optionInt = param
-	return this.Get_return_optionString
-}
-`),
 		Entry("imported generic type", `
 package pkg
 
@@ -752,20 +1150,42 @@ import (
 	"github.com/ArtHustle/mock_gen/test/dummy"
 )
 
+type ServiceMock_Add_Call struct {
+	OneInt dummy.One[int]
+}
+
 type ServiceMock struct {
-	Add_calls        int
-	Add_param_oneInt dummy.One[int]
+	add_calls_log    []ServiceMock_Add_Call
+	add_param_oneInt dummy.One[int]
 }
 
 func (this *ServiceMock) Add(param dummy.One[int]) {
-	this.Add_calls++
-	this.Add_param_oneInt = param
+	this.add_param_oneInt = param
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{OneInt: param})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_oneInt() dummy.One[int] {
+	return this.add_param_oneInt
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
 
-		// --- embedded interfaces ---
+		// --- embedded interfaces (transitive + cross-package) ---
 
-		Entry("embedded local interfaces (chain of three)", `
+		Entry("transitively embedded local interfaces", `
 package pkg
 
 type Service interface {
@@ -782,49 +1202,143 @@ type ParentService interface {
 }`,
 			`package test
 
+type ServiceMock_Base_Call struct {
+}
+
 type ServiceMock struct {
-	Base_calls int
+	base_calls_log []ServiceMock_Base_Call
 }
 
 func (this *ServiceMock) Base() {
-	this.Base_calls++
+	this.base_calls_log = append(this.base_calls_log, ServiceMock_Base_Call{})
+}
+
+func (this *ServiceMock) Base_calls() []ServiceMock_Base_Call {
+	out := make([]ServiceMock_Base_Call, len(this.base_calls_log))
+	copy(out, this.base_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Base_call(i int) ServiceMock_Base_Call {
+	return this.base_calls_log[i]
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.base_calls_log = nil
+}
+
+type GrandParentServiceMock_Base_Call struct {
+}
+
+type GrandParentServiceMock_GrandParent_Call struct {
+}
+
+type GrandParentServiceMock_Parent_Call struct {
 }
 
 type GrandParentServiceMock struct {
-	Base_calls int
+	base_calls_log []GrandParentServiceMock_Base_Call
 
-	GrandParent_calls int
+	grandParent_calls_log []GrandParentServiceMock_GrandParent_Call
 
-	Parent_calls int
+	parent_calls_log []GrandParentServiceMock_Parent_Call
 }
 
 func (this *GrandParentServiceMock) Base() {
-	this.Base_calls++
+	this.base_calls_log = append(this.base_calls_log, GrandParentServiceMock_Base_Call{})
+}
+
+func (this *GrandParentServiceMock) Base_calls() []GrandParentServiceMock_Base_Call {
+	out := make([]GrandParentServiceMock_Base_Call, len(this.base_calls_log))
+	copy(out, this.base_calls_log)
+	return out
+}
+
+func (this *GrandParentServiceMock) Base_call(i int) GrandParentServiceMock_Base_Call {
+	return this.base_calls_log[i]
 }
 
 func (this *GrandParentServiceMock) GrandParent() {
-	this.GrandParent_calls++
+	this.grandParent_calls_log = append(this.grandParent_calls_log, GrandParentServiceMock_GrandParent_Call{})
+}
+
+func (this *GrandParentServiceMock) GrandParent_calls() []GrandParentServiceMock_GrandParent_Call {
+	out := make([]GrandParentServiceMock_GrandParent_Call, len(this.grandParent_calls_log))
+	copy(out, this.grandParent_calls_log)
+	return out
+}
+
+func (this *GrandParentServiceMock) GrandParent_call(i int) GrandParentServiceMock_GrandParent_Call {
+	return this.grandParent_calls_log[i]
 }
 
 func (this *GrandParentServiceMock) Parent() {
-	this.Parent_calls++
+	this.parent_calls_log = append(this.parent_calls_log, GrandParentServiceMock_Parent_Call{})
+}
+
+func (this *GrandParentServiceMock) Parent_calls() []GrandParentServiceMock_Parent_Call {
+	out := make([]GrandParentServiceMock_Parent_Call, len(this.parent_calls_log))
+	copy(out, this.parent_calls_log)
+	return out
+}
+
+func (this *GrandParentServiceMock) Parent_call(i int) GrandParentServiceMock_Parent_Call {
+	return this.parent_calls_log[i]
+}
+
+func (this *GrandParentServiceMock) Reset_history() {
+	this.base_calls_log = nil
+	this.grandParent_calls_log = nil
+	this.parent_calls_log = nil
+}
+
+type ParentServiceMock_Base_Call struct {
+}
+
+type ParentServiceMock_Parent_Call struct {
 }
 
 type ParentServiceMock struct {
-	Base_calls int
+	base_calls_log []ParentServiceMock_Base_Call
 
-	Parent_calls int
+	parent_calls_log []ParentServiceMock_Parent_Call
 }
 
 func (this *ParentServiceMock) Base() {
-	this.Base_calls++
+	this.base_calls_log = append(this.base_calls_log, ParentServiceMock_Base_Call{})
+}
+
+func (this *ParentServiceMock) Base_calls() []ParentServiceMock_Base_Call {
+	out := make([]ParentServiceMock_Base_Call, len(this.base_calls_log))
+	copy(out, this.base_calls_log)
+	return out
+}
+
+func (this *ParentServiceMock) Base_call(i int) ParentServiceMock_Base_Call {
+	return this.base_calls_log[i]
 }
 
 func (this *ParentServiceMock) Parent() {
-	this.Parent_calls++
+	this.parent_calls_log = append(this.parent_calls_log, ParentServiceMock_Parent_Call{})
+}
+
+func (this *ParentServiceMock) Parent_calls() []ParentServiceMock_Parent_Call {
+	out := make([]ParentServiceMock_Parent_Call, len(this.parent_calls_log))
+	copy(out, this.parent_calls_log)
+	return out
+}
+
+func (this *ParentServiceMock) Parent_call(i int) ParentServiceMock_Parent_Call {
+	return this.parent_calls_log[i]
+}
+
+func (this *ParentServiceMock) Reset_history() {
+	this.base_calls_log = nil
+	this.parent_calls_log = nil
 }
 `),
-		Entry("embedded interfaces from another package", `
+
+		Entry("two embedded cross-package interfaces (io.Reader has params + named returns)", `
 package pkg
 
 import "io"
@@ -836,37 +1350,99 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+}
+
+type ServiceMock_Close_Call struct {
+}
+
+type ServiceMock_Read_Call struct {
+	P []byte
+}
+
 type ServiceMock struct {
-	Add_calls int
+	add_calls_log []ServiceMock_Add_Call
 
-	Close_calls        int
-	Close_return_error error
+	close_calls_log    []ServiceMock_Close_Call
+	close_return_error error
 
-	Read_calls      int
-	Read_param_p    []byte
-	Read_return_n   int
-	Read_return_err error
+	read_calls_log  []ServiceMock_Read_Call
+	read_param_p    []byte
+	read_return_n   int
+	read_return_err error
 }
 
 func (this *ServiceMock) Add() {
-	this.Add_calls++
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
 }
 
 func (this *ServiceMock) Close() error {
-	this.Close_calls++
-	return this.Close_return_error
+	this.close_calls_log = append(this.close_calls_log, ServiceMock_Close_Call{})
+	return this.close_return_error
+}
+
+func (this *ServiceMock) Close_calls() []ServiceMock_Close_Call {
+	out := make([]ServiceMock_Close_Call, len(this.close_calls_log))
+	copy(out, this.close_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Close_call(i int) ServiceMock_Close_Call {
+	return this.close_calls_log[i]
+}
+
+func (this *ServiceMock) Close_return_error(value error) {
+	this.close_return_error = value
 }
 
 func (this *ServiceMock) Read(p []byte) (n int, err error) {
-	this.Read_calls++
-	this.Read_param_p = p
-	return this.Read_return_n, this.Read_return_err
+	this.read_param_p = p
+	this.read_calls_log = append(this.read_calls_log, ServiceMock_Read_Call{P: p})
+	return this.read_return_n, this.read_return_err
+}
+
+func (this *ServiceMock) Read_calls() []ServiceMock_Read_Call {
+	out := make([]ServiceMock_Read_Call, len(this.read_calls_log))
+	copy(out, this.read_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Read_call(i int) ServiceMock_Read_Call {
+	return this.read_calls_log[i]
+}
+
+func (this *ServiceMock) Read_param_p() []byte {
+	return this.read_param_p
+}
+
+func (this *ServiceMock) Read_return_n(value int) {
+	this.read_return_n = value
+}
+
+func (this *ServiceMock) Read_return_err(value error) {
+	this.read_return_err = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
+	this.close_calls_log = nil
+	this.read_calls_log = nil
 }
 `),
 
 		// --- import aliasing / collision handling ---
 
-		Entry("imports of distinct packages with the same package name", `
+		Entry("imports of distinct packages with same package name get aliased", `
 package pkg
 
 import (
@@ -886,21 +1462,54 @@ import (
 	cModel "github.com/ArtHustle/mock_gen/test/dummy/c/model"
 )
 
+type ServiceMock_Add_Call struct {
+	A model.A
+	B bModel.B
+	C cModel.C
+}
+
 type ServiceMock struct {
-	Add_calls   int
-	Add_param_a model.A
-	Add_param_b bModel.B
-	Add_param_c cModel.C
+	add_calls_log []ServiceMock_Add_Call
+	add_param_a   model.A
+	add_param_b   bModel.B
+	add_param_c   cModel.C
 }
 
 func (this *ServiceMock) Add(param1 model.A, param2 bModel.B, param3 cModel.C) {
-	this.Add_calls++
-	this.Add_param_a = param1
-	this.Add_param_b = param2
-	this.Add_param_c = param3
+	this.add_param_a = param1
+	this.add_param_b = param2
+	this.add_param_c = param3
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{A: param1, B: param2, C: param3})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_a() model.A {
+	return this.add_param_a
+}
+
+func (this *ServiceMock) Add_param_b() bModel.B {
+	return this.add_param_b
+}
+
+func (this *ServiceMock) Add_param_c() cModel.C {
+	return this.add_param_c
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("same struct name across different packages (params)", `
+
+		Entry("same struct name across different packages disambiguated in field names (params)", `
 package pkg
 
 import (
@@ -918,19 +1527,47 @@ import (
 	bModel "github.com/ArtHustle/mock_gen/test/dummy/b/model"
 )
 
+type ServiceMock_Add_Call struct {
+	A1 model.A
+	A2 bModel.A
+}
+
 type ServiceMock struct {
-	Add_calls    int
-	Add_param_a1 model.A
-	Add_param_a2 bModel.A
+	add_calls_log []ServiceMock_Add_Call
+	add_param_a1  model.A
+	add_param_a2  bModel.A
 }
 
 func (this *ServiceMock) Add(param1 model.A, param2 bModel.A) {
-	this.Add_calls++
-	this.Add_param_a1 = param1
-	this.Add_param_a2 = param2
+	this.add_param_a1 = param1
+	this.add_param_a2 = param2
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{A1: param1, A2: param2})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_a1() model.A {
+	return this.add_param_a1
+}
+
+func (this *ServiceMock) Add_param_a2() bModel.A {
+	return this.add_param_a2
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("same struct name across different packages (returns)", `
+
+		Entry("same struct name across different packages disambiguated in field names (returns)", `
 package pkg
 
 import (
@@ -948,18 +1585,44 @@ import (
 	bModel "github.com/ArtHustle/mock_gen/test/dummy/b/model"
 )
 
+type ServiceMock_Add_Call struct {
+}
+
 type ServiceMock struct {
-	Add_calls     int
-	Add_return_a1 model.A
-	Add_return_a2 bModel.A
+	add_calls_log []ServiceMock_Add_Call
+	add_return_a1 model.A
+	add_return_a2 bModel.A
 }
 
 func (this *ServiceMock) Add() (model.A, bModel.A) {
-	this.Add_calls++
-	return this.Add_return_a1, this.Add_return_a2
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
+	return this.add_return_a1, this.add_return_a2
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_return_a1(value model.A) {
+	this.add_return_a1 = value
+}
+
+func (this *ServiceMock) Add_return_a2(value bModel.A) {
+	this.add_return_a2 = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
-		Entry("import sorting: std then third-party then local", `
+
+		Entry("import grouping: stdlib then third-party then local module", `
 package pkg
 
 import (
@@ -985,20 +1648,57 @@ import (
 	"mock_gen"
 )
 
+type ServiceMock_Add_Call struct {
+	Context  context.Context
+	Duration time.Duration
+	Struct   dummy.Struct
+	MyStruct mock_gen.MyStruct
+}
+
 type ServiceMock struct {
-	Add_calls          int
-	Add_param_context  context.Context
-	Add_param_duration time.Duration
-	Add_param_struct   dummy.Struct
-	Add_param_myStruct mock_gen.MyStruct
+	add_calls_log      []ServiceMock_Add_Call
+	add_param_context  context.Context
+	add_param_duration time.Duration
+	add_param_struct   dummy.Struct
+	add_param_myStruct mock_gen.MyStruct
 }
 
 func (this *ServiceMock) Add(param1 context.Context, param2 time.Duration, param3 dummy.Struct, param4 mock_gen.MyStruct) {
-	this.Add_calls++
-	this.Add_param_context = param1
-	this.Add_param_duration = param2
-	this.Add_param_struct = param3
-	this.Add_param_myStruct = param4
+	this.add_param_context = param1
+	this.add_param_duration = param2
+	this.add_param_struct = param3
+	this.add_param_myStruct = param4
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{Context: param1, Duration: param2, Struct: param3, MyStruct: param4})
+}
+
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
+}
+
+func (this *ServiceMock) Add_param_context() context.Context {
+	return this.add_param_context
+}
+
+func (this *ServiceMock) Add_param_duration() time.Duration {
+	return this.add_param_duration
+}
+
+func (this *ServiceMock) Add_param_struct() dummy.Struct {
+	return this.add_param_struct
+}
+
+func (this *ServiceMock) Add_param_myStruct() mock_gen.MyStruct {
+	return this.add_param_myStruct
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `),
 	)

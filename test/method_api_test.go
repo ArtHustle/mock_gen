@@ -7,11 +7,10 @@ import (
 	. "github.com/ArtHustle/mock_gen"
 )
 
-// --method-api: unexport mock fields and expose them through getter/setter
-// methods. Designed so that flipping --thread-safe on later changes only
-// internal locking, never the call-site API. This is the future default;
-// the legacy public-field shape will eventually be deprecated.
-var _ = Describe("Method API", func() {
+// Default (no flags): unexport mock fields and expose them through
+// getter/setter methods. No mutex. Flipping --thread-safe on later changes
+// only internal locking, never the call-site API.
+var _ = Describe("Default (method-based API, no mutex)", func() {
 
 	// --- shape tests: literal expected output ---
 
@@ -84,7 +83,7 @@ func (this *ServiceMock) Reset_history() {
 	this.add_calls_log = nil
 	this.process_calls_log = nil
 }
-`, Options{MethodAPI: true}),
+`, Options{}),
 
 		Entry("with return handler (handler invoked under no lock)", `
 package pkg
@@ -139,7 +138,7 @@ func (this *ServiceMock) Add_return_string(value string) {
 func (this *ServiceMock) Reset_history() {
 	this.add_calls_log = nil
 }
-`, Options{MethodAPI: true, GenerateReturnHandler: true}),
+`, Options{GenerateReturnHandler: true}),
 
 		Entry("multi-return method (no handler)", `
 package pkg
@@ -184,7 +183,7 @@ func (this *ServiceMock) Add_return_error(value error) {
 func (this *ServiceMock) Reset_history() {
 	this.add_calls_log = nil
 }
-`, Options{MethodAPI: true}),
+`, Options{}),
 
 		Entry("imported types in accessor signatures", `
 package pkg
@@ -242,7 +241,7 @@ func (this *ServiceMock) Send_return_error(value error) {
 func (this *ServiceMock) Reset_history() {
 	this.send_calls_log = nil
 }
-`, Options{MethodAPI: true}),
+`, Options{}),
 
 		Entry("embedded interface from another package", `
 package pkg
@@ -305,67 +304,32 @@ func (this *ServiceMock) Reset_history() {
 	this.add_calls_log = nil
 	this.close_calls_log = nil
 }
-`, Options{MethodAPI: true}),
+`, Options{}),
 	)
 
 	// --- property tests ---
 
-	// The painless-transition guarantee: enabling --thread-safe on top of
-	// --method-api must not change the API surface of the mock. Test code
-	// written against --method-api alone must compile and behave identically
-	// when --thread-safe is added — only the internal locking changes.
+	// Painless-transition guarantee: enabling --thread-safe must not change
+	// the API surface of the mock. Test code written against the default
+	// must compile and behave identically when --thread-safe is added —
+	// only the internal locking changes.
 
-	DescribeTable("flipping --thread-safe on top of --method-api preserves exported signatures",
+	DescribeTable("flipping --thread-safe on preserves exported signatures",
 		func(source string) {
-			methodAPIOnly, err := GenerateMockContentWithOptions(source, Options{
-				MethodAPI:             true,
+			defaultOpts, err := GenerateMockContentWithOptions(source, Options{
 				GenerateReturnHandler: true,
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			bothFlags, err := GenerateMockContentWithOptions(source, Options{
-				MethodAPI:             true,
+			threadSafe, err := GenerateMockContentWithOptions(source, Options{
 				MakeThreadSafe:        true,
 				GenerateReturnHandler: true,
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(extractServiceMockMethodSignatures(methodAPIOnly)).
-				To(Equal(extractServiceMockMethodSignatures(bothFlags)),
+			Expect(extractServiceMockMethodSignatures(defaultOpts)).
+				To(Equal(extractServiceMockMethodSignatures(threadSafe)),
 					"flipping --thread-safe on must not change exported signatures")
-		},
-		Entry("single param, single return", `package pkg
-type Service interface { Send(ctx int, msg string) error }`),
-		Entry("multi return", `package pkg
-type Service interface { Get() (string, int, error) }`),
-		Entry("no params no returns", `package pkg
-type Service interface { Process() }`),
-		Entry("variadic", `package pkg
-type Service interface { Log(values ...int) error }`),
-		Entry("imported types", `package pkg
-import "net/http"
-type Service interface { Send(r *http.Request) (*http.Response, error) }`),
-		Entry("embedded interface", `package pkg
-import "io"
-type Service interface { io.Closer; Add() }`),
-		Entry("generic type", `package pkg
-type Option[T any] struct{}
-type Service interface { Get(Option[int]) Option[string] }`),
-		Entry("named returns", `package pkg
-type Service interface { Fetch(id int) (name string, age int, err error) }`),
-	)
-
-	DescribeTable("--method-api and --thread-safe produce identical exported signatures",
-		func(source string) {
-			methodAPIOnly, err := GenerateMockContentWithOptions(source, Options{MethodAPI: true})
-			Expect(err).NotTo(HaveOccurred())
-
-			threadSafeOnly, err := GenerateMockContentWithOptions(source, Options{MakeThreadSafe: true})
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(extractServiceMockMethodSignatures(methodAPIOnly)).
-				To(Equal(extractServiceMockMethodSignatures(threadSafeOnly)),
-					"--method-api and --thread-safe must produce identical exported signatures")
 		},
 		Entry("single param, single return", `package pkg
 type Service interface { Send(ctx int, msg string) error }`),
@@ -393,7 +357,7 @@ type Service interface { Fetch(id int) (name string, age int, err error) }`),
 
 type Service interface {
 	Add(one int) string
-}`, Options{MethodAPI: true})
+}`, Options{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).NotTo(ContainSubstring(`"sync"`),
 			"sync should not be imported without --thread-safe")

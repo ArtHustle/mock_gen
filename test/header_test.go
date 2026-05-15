@@ -23,12 +23,29 @@ type Service interface {
 
 package test
 
+type ServiceMock_DoSomething_Call struct {
+}
+
 type ServiceMock struct {
-	DoSomething_calls int
+	doSomething_calls_log []ServiceMock_DoSomething_Call
 }
 
 func (this *ServiceMock) DoSomething() {
-	this.DoSomething_calls++
+	this.doSomething_calls_log = append(this.doSomething_calls_log, ServiceMock_DoSomething_Call{})
+}
+
+func (this *ServiceMock) DoSomething_calls() []ServiceMock_DoSomething_Call {
+	out := make([]ServiceMock_DoSomething_Call, len(this.doSomething_calls_log))
+	copy(out, this.doSomething_calls_log)
+	return out
+}
+
+func (this *ServiceMock) DoSomething_call(i int) ServiceMock_DoSomething_Call {
+	return this.doSomething_calls_log[i]
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.doSomething_calls_log = nil
 }
 `, Options{AddHeaderNote: true}),
 	)

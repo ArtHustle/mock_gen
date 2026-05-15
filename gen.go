@@ -176,16 +176,8 @@ func assignAliasesToImportPaths(importPackages []*types.Package, currentPkgPath 
 type Options struct {
 	GenerateReturnHandler bool
 	MakeThreadSafe        bool
-	MethodAPI             bool
 	AddHeaderNote         bool
 	CustomTemplate        string
-}
-
-// UseMethodAPI reports whether the generated mock should expose unexported
-// fields and method-based accessors. Always true when MakeThreadSafe is set
-// (thread safety requires the method-based API).
-func (o Options) UseMethodAPI() bool {
-	return o.MakeThreadSafe || o.MethodAPI
 }
 
 type MockData struct {
@@ -208,7 +200,6 @@ type InterfaceData struct {
 
 type MethodData struct {
 	Name             string
-	CallsField       string
 	CallStructName   string
 	CallStructFields []FieldData
 	CallsLogField    string
@@ -604,60 +595,41 @@ func (this *generator) collectInterfaceData(name string, iface *types.Interface)
 
 func (this *generator) collectMethodData(method *types.Func, mockName string) MethodData {
 	sig := method.Type().(*types.Signature)
-
-	callsFieldName := method.Name() + "_calls"
-	if this.options.UseMethodAPI() {
-		callsFieldName = strings.ToLower(method.Name()[0:1]) + method.Name()[1:] + "_calls"
-	}
+	methodLower := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
 
 	methodData := MethodData{
-		Name:       method.Name(),
-		CallsField: callsFieldName,
-		Params:     []FieldData{},
-		Returns:    []FieldData{},
-	}
-
-	if this.options.UseMethodAPI() {
-		methodLower := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
-		methodData.CallStructName = mockName + "_" + method.Name() + "_Call"
-		methodData.CallsLogField = methodLower + "_calls_log"
-		methodData.CallByIndexName = method.Name() + "_call"
-		methodData.CallStructFields = []FieldData{}
-		for j := range sig.Params().Len() {
-			param := sig.Params().At(j)
-			rawFieldName := getParamMember(method, j)
-			suffix := rawFieldName[len(method.Name()+"_param_"):]
-			fieldName := toTitle(suffix)
-			methodData.CallStructFields = append(methodData.CallStructFields, FieldData{
-				Name: fieldName,
-				Type: this.getFieldType(param.Type()),
-			})
-		}
+		Name:             method.Name(),
+		CallStructName:   mockName + "_" + method.Name() + "_Call",
+		CallsLogField:    methodLower + "_calls_log",
+		CallByIndexName:  method.Name() + "_call",
+		CallStructFields: []FieldData{},
+		Params:           []FieldData{},
+		Returns:          []FieldData{},
 	}
 
 	for j := range sig.Params().Len() {
 		param := sig.Params().At(j)
-		parType := this.getFieldType(param.Type())
-		fieldName := getParamMember(method, j)
-		if this.options.UseMethodAPI() {
-			methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
-			fieldName = methodName + "_param_" + fieldName[len(method.Name()+"_param_"):]
-		}
+		rawFieldName := getParamMember(method, j)
+		suffix := rawFieldName[len(method.Name()+"_param_"):]
+		methodData.CallStructFields = append(methodData.CallStructFields, FieldData{
+			Name: toTitle(suffix),
+			Type: this.getFieldType(param.Type()),
+		})
+	}
+
+	for j := range sig.Params().Len() {
+		param := sig.Params().At(j)
+		rawFieldName := getParamMember(method, j)
 		methodData.Params = append(methodData.Params, FieldData{
-			Name: fieldName,
-			Type: parType,
+			Name: methodLower + "_param_" + rawFieldName[len(method.Name()+"_param_"):],
+			Type: this.getFieldType(param.Type()),
 		})
 	}
 
 	if this.options.GenerateReturnHandler && sig.Results().Len() > 0 {
-		fieldName := method.Name() + "_return"
-		if this.options.UseMethodAPI() {
-			fieldName = strings.ToLower(method.Name()[0:1]) + method.Name()[1:] + "_return"
-		}
-
 		paramTypes, returnTypes := this.handlerSignatureTypes(sig)
 		methodData.ReturnHandler = &ReturnHandlerData{
-			FieldName:   fieldName,
+			FieldName:   methodLower + "_return",
 			ParamTypes:  paramTypes,
 			ReturnTypes: returnTypes,
 		}
@@ -665,22 +637,15 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 
 	for j := range sig.Results().Len() {
 		result := sig.Results().At(j)
-		fieldName := getReturnMember(method, j)
-		if this.options.UseMethodAPI() {
-			methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
-			fieldName = methodName + "_return_" + fieldName[len(method.Name()+"_return_"):]
-		}
+		rawFieldName := getReturnMember(method, j)
 		methodData.Returns = append(methodData.Returns, FieldData{
-			Name: fieldName,
+			Name: methodLower + "_return_" + rawFieldName[len(method.Name()+"_return_"):],
 			Type: this.getFieldType(result.Type()),
 		})
 	}
 
 	methodData.Signature = this.collectSignatureData(method, sig)
-
-	if this.options.UseMethodAPI() {
-		methodData.Getters = this.collectGetterData(method, sig, methodData.CallStructName, methodData.CallsLogField)
-	}
+	methodData.Getters = this.collectGetterData(method, sig, methodData.CallStructName, methodData.CallsLogField)
 
 	return methodData
 }
@@ -726,10 +691,8 @@ func (this *generator) collectSignatureData(method *types.Func, sig *types.Signa
 			returns.WriteString(pref + this.getFieldType(result.Type()))
 
 			returnField := getReturnMember(method, j)
-			if this.options.UseMethodAPI() {
-				methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
-				returnField = methodName + "_return_" + returnField[len(method.Name()+"_return_"):]
-			}
+			methodName := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
+			returnField = methodName + "_return_" + returnField[len(method.Name()+"_return_"):]
 			returnFields = append(returnFields, "this."+returnField)
 		}
 		if useParens {
