@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -19,6 +22,10 @@ func determineOutputFile(inputFilePath string) string {
 }
 
 func storeToFile(filePath, content string) {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		fmt.Println("Failed to create output dir:", err)
+		os.Exit(1)
+	}
 	outputFile, err := os.Create(filePath)
 	if err != nil {
 		fmt.Println("Failed to create output file:", err)
@@ -35,6 +42,38 @@ func storeToFile(filePath, content string) {
 	}
 }
 
+// mockStructRe matches `type <Name>Mock struct {`. Used to decide whether a
+// generated output file contains at least one mock (i.e. the source file
+// declared at least one interface) — if not, we skip writing it in
+// directory-mode invocations.
+var mockStructRe = regexp.MustCompile(`(?m)^type \w+Mock struct`)
+
+func hasMock(content string) bool {
+	return mockStructRe.MatchString(content)
+}
+
+// listSourceFiles returns the non-test .go files in dir, sorted by name.
+// _test.go files are excluded.
+func listSourceFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, name))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func main() {
 	var outputFile string
 	var templateFile string
@@ -43,21 +82,24 @@ func main() {
 	var noHeaderNote bool
 
 	var rootCmd = &cobra.Command{
-		Use:   "mock_gen [flags] <source_file.go>",
+		Use:   "mock_gen [flags] <source_file.go | dir>",
 		Short: "Generate Go mocks for interfaces",
 		Long: `mock_gen generates mock implementations for all interfaces in a Go source file.
 
-The input file must be inside a Go module (a directory tree containing a go.mod file).
-The generated mock is placed in a "test" subdirectory by default, using the source
-package's types with proper import paths.
+The input is either a single .go file or a directory. For a directory, every
+non-test .go file in it is scanned and one mock is generated per source file
+that declares at least one interface. The input (file or directory) must be
+inside a Go module (a directory tree containing a go.mod file). Generated
+mocks are placed in a "test" subdirectory by default.
 
 Examples:
   mock_gen service.go
   mock_gen --output mocks/service_mock.go service.go
-  mock_gen --generate-return-handler --thread-safe service.go`,
+  mock_gen --generate-return-handler --thread-safe service.go
+  mock_gen ./internal/service`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			inputFilePath := args[0]
+			inputPath := args[0]
 
 			var customTemplate string
 			if templateFile != "" {
@@ -69,25 +111,33 @@ Examples:
 				customTemplate = string(tmplBytes)
 			}
 
-			mockContent, e := mock_gen.GenerateMockFileWithOptions(inputFilePath, mock_gen.Options{
+			opts := mock_gen.Options{
 				GenerateReturnHandler: generateReturnHandler,
 				MakeThreadSafe:        threadSafe,
 				AddHeaderNote:         !noHeaderNote,
 				CustomTemplate:        customTemplate,
-			})
-			if e != nil {
-				fmt.Println("Failed to generate mock content:", e)
+			}
+
+			info, err := os.Stat(inputPath)
+			if err != nil {
+				fmt.Println("Failed to stat input:", err)
 				os.Exit(1)
 			}
 
-			if outputFile == "" {
-				outputFile = determineOutputFile(inputFilePath)
+			if info.IsDir() {
+				if outputFile != "" {
+					fmt.Println("--output is not supported with a directory input (multiple outputs)")
+					os.Exit(1)
+				}
+				generateDir(inputPath, opts)
+				return
 			}
-			storeToFile(outputFile, mockContent)
+
+			generateSingleFile(inputPath, outputFile, opts)
 		},
 	}
 
-	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path (optional)")
+	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path (optional, single-file mode only)")
 	rootCmd.Flags().StringVarP(&templateFile, "template", "t", "",
 		"Path to a custom Go text/template file (.tmpl) for code generation. "+
 			"The template receives a MockData struct with parsed interface information "+
@@ -103,6 +153,46 @@ Examples:
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func generateSingleFile(inputFilePath, outputFile string, opts mock_gen.Options) {
+	mockContent, e := mock_gen.GenerateMockFileWithOptions(inputFilePath, opts)
+	if e != nil {
+		fmt.Println("Failed to generate mock content:", e)
+		os.Exit(1)
+	}
+
+	if outputFile == "" {
+		outputFile = determineOutputFile(inputFilePath)
+	}
+	storeToFile(outputFile, mockContent)
+}
+
+func generateDir(dir string, opts mock_gen.Options) {
+	files, err := listSourceFiles(dir)
+	if err != nil {
+		fmt.Println("Failed to list source files:", err)
+		os.Exit(1)
+	}
+
+	written := 0
+	for _, f := range files {
+		content, err := mock_gen.GenerateMockFileWithOptions(f, opts)
+		if err != nil {
+			fmt.Printf("Failed to generate mock for %s: %v\n", f, err)
+			os.Exit(1)
+		}
+		if !hasMock(content) {
+			continue
+		}
+		storeToFile(determineOutputFile(f), content)
+		written++
+	}
+
+	if written == 0 {
+		fmt.Printf("No interfaces found in %s\n", dir)
 		os.Exit(1)
 	}
 }

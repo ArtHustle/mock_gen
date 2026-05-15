@@ -1,6 +1,7 @@
 package test
 
 import (
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -39,14 +40,23 @@ func runGenEntry(input, expectedOutputTmpl string, extra ...Options) {
 	Expect(actual).To(MatchString(output.String()))
 }
 
-// testMockCallAt mirrors the `mockCallAt` helper emitted into every
-// generated mock. Tested in call_recording_test.go to verify negative-index
-// behavior independently of compiling a generated mock.
-func testMockCallAt[T any](log []T, i int) T {
-	if i < 0 {
-		i += len(log)
+// callIndexTester mirrors the generated `<MockName>.callIndex` method.
+// Tested in call_recording_test.go to verify negative-index resolution
+// and out-of-range panics without compiling a generated mock.
+type callIndexTester struct{}
+
+func (callIndexTester) callIndex(length, i int) int {
+	resolved := i
+	if resolved < 0 {
+		resolved += length
 	}
-	return log[i]
+	if resolved < 0 || resolved >= length {
+		if i < 0 {
+			panic("Mock call index " + strconv.Itoa(i) + " (resolved to " + strconv.Itoa(resolved) + ") out of range, log has " + strconv.Itoa(length) + " entries")
+		}
+		panic("Mock call index " + strconv.Itoa(i) + " out of range, log has " + strconv.Itoa(length) + " entries")
+	}
+	return resolved
 }
 
 // extractServiceMockMethodSignatures returns the exported method signatures

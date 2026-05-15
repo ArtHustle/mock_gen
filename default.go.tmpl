@@ -6,16 +6,7 @@
 {{end}}{{range .Imports.NonStdImports}}	{{.}}
 {{end}})
 
-{{end}}// mockCallAt returns log[i], treating negative i as an offset from the end.
-// Out-of-range indices panic (slice semantics).
-func mockCallAt[T any](log []T, i int) T {
-	if i < 0 {
-		i += len(log)
-	}
-	return log[i]
-}
-
-{{range $iface := .Interfaces}}{{range $method := $iface.Methods}}type {{$method.CallStructName}} struct {
+{{end}}{{range $iface := .Interfaces}}{{range $method := $iface.Methods}}type {{$method.CallStructName}} struct {
 {{range $method.CallStructFields}}	{{.Name}} {{.Type}}
 {{end}}}
 
@@ -32,12 +23,12 @@ func mockCallAt[T any](log []T, i int) T {
 {{- if and $.Options.MakeThreadSafe $method.Returns}}
 	this.mu.Lock()
 	this.{{$method.CallsLogField}} = append(this.{{$method.CallsLogField}}, {{$method.CallStructName}}{ {{- range $i, $f := $method.CallStructFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
-{{if $method.ReturnHandler}}	handler := this.{{$method.ReturnHandler.FieldName}}
+{{if $method.ReturnHandler}}	_handler := this.{{$method.ReturnHandler.FieldName}}
 {{end}}{{range $i, $rf := $method.Signature.ReturnFields}}	_r{{$i}} := {{$rf}}
 {{end}}	this.mu.Unlock()
 
-{{if $method.ReturnHandler}}	if handler != nil {
-		return handler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
+{{if $method.ReturnHandler}}	if _handler != nil {
+		return _handler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
 	}
 {{end}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}_r{{$i}}{{end}}
 {{else}}
@@ -64,7 +55,14 @@ func (this *{{$iface.MockName}}) {{$method.Getters.CallByIndex.MethodName}}(i in
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-{{end}}	return mockCallAt(this.{{$method.Getters.CallByIndex.FieldName}}, i)
+{{end}}	return this.{{$method.Getters.CallByIndex.FieldName}}[this.callIndex(len(this.{{$method.Getters.CallByIndex.FieldName}}), i)]
+}
+
+func (this *{{$iface.MockName}}) {{$method.Getters.CallCount.MethodName}}() int {
+{{- if $.Options.MakeThreadSafe}}
+	this.mu.Lock()
+	defer this.mu.Unlock()
+{{end}}	return len(this.{{$method.Getters.CallCount.FieldName}})
 }
 
 {{if $method.Getters.HandlerSetter}}func (this *{{$iface.MockName}}) {{$method.Getters.HandlerSetter.MethodName}}(value {{$method.Getters.HandlerSetter.ParamType}}) {
@@ -87,5 +85,22 @@ func (this *{{$iface.MockName}}) {{$method.Getters.CallByIndex.MethodName}}(i in
 	defer this.mu.Unlock()
 {{end}}{{range $method := $iface.Methods}}	this.{{$method.CallsLogField}} = nil
 {{end}}}
+
+// callIndex resolves the index argument of a Method_call(i) indexer:
+// negative i counts from the end; out-of-range i panics with a message
+// that surfaces both the original input and the log length.
+func (this *{{$iface.MockName}}) callIndex(length, i int) int {
+	resolved := i
+	if resolved < 0 {
+		resolved += length
+	}
+	if resolved < 0 || resolved >= length {
+		if i < 0 {
+			panic("{{$iface.MockName}} call index " + strconv.Itoa(i) + " (resolved to " + strconv.Itoa(resolved) + ") out of range, log has " + strconv.Itoa(length) + " entries")
+		}
+		panic("{{$iface.MockName}} call index " + strconv.Itoa(i) + " out of range, log has " + strconv.Itoa(length) + " entries")
+	}
+	return resolved
+}
 
 {{end}}

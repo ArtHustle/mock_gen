@@ -13,15 +13,15 @@ go install github.com/ArtHustle/moc_gen/cmd/mock_gen@latest
 ## Usage
 
 ```shell
-mock_gen [flags] <source_file.go>
+mock_gen [flags] <source_file.go | dir>
 ```
 
-By default, the output is written to `./test/<source_file>_mock.go` relative to the input file.
+The input is either a single `.go` file or a directory. With a file, the output is written to `./test/<source_file>_mock.go` relative to the input file. With a directory, every non-test `.go` file in it is scanned and one mock is generated per source file that declares at least one interface; files without interfaces and `*_test.go` files are skipped.
 
 It can also be executed with `go run`:
 
 ```bash
-go run github.com/ArtHustle/moc_gen/cmd/mock_gen@latest -- [flags] <source_file.go>
+go run github.com/ArtHustle/moc_gen/cmd/mock_gen@latest -- [flags] <source_file.go | dir>
 ```
 
 ## Options
@@ -64,12 +64,10 @@ package test
 
 import (
 	"context"
+	"strconv"
 
 	"your/project/internal/service/product/model"
 )
-
-// mockCallAt returns log[i], treating negative i as an offset from the end.
-func mockCallAt[T any](log []T, i int) T { /* ... */ }
 
 type ServiceMock_GetProductByID_Call struct {
 	Ctx       context.Context
@@ -87,9 +85,15 @@ func (this *ServiceMock) GetProductByID(ctx context.Context, productID model.Pro
 }
 
 func (this *ServiceMock) GetProductByID_calls() []ServiceMock_GetProductByID_Call { /* ... */ }
-func (this *ServiceMock) GetProductByID_call(i int) ServiceMock_GetProductByID_Call { /* ... */ }
+func (this *ServiceMock) GetProductByID_call(i int) ServiceMock_GetProductByID_Call { /* delegates to callIndex */ }
+func (this *ServiceMock) GetProductByID_call_count() int { /* len of the log */ }
 func (this *ServiceMock) GetProductByID_return_product(value model.Product) { /* ... */ }
 func (this *ServiceMock) Reset_history() { /* ... */ }
+
+// Unexported helper, scoped per mock so multiple mocks in the same package
+// don't collide. Used by Method_call(i) to resolve negative indices and panic
+// with descriptive messages on out-of-range access.
+func (this *ServiceMock) callIndex(length, i int) int { /* ... */ }
 ```
 
 Same-package types (value types, slices, pointers) are fully supported and automatically qualified with the source package import path in the generated mock.
@@ -132,8 +136,9 @@ Every method gets a full call log. Per method, the generator emits:
 - An exported, public-field struct `<MockName>_<MethodName>_Call` holding one entry per call (one field per param, title-cased from the original param name, or type-derived for unnamed params).
 - A `<MethodName>_calls() []<MockName>_<MethodName>_Call` getter returning the whole log (a defensive copy under `--thread-safe`).
 - A `<MethodName>_call(i int) <MockName>_<MethodName>_Call` indexer. Negative indices count from the end (`-1` is the last call, `-2` the second-to-last). Out-of-range indices panic.
+- A `<MethodName>_call_count() int` shortcut for `len(<MethodName>_calls())` that avoids the defensive slice copy.
 - A single `Reset_history()` on the mock that zeroes every per-method log without touching installed handlers or armed static return values.
-- A package-private `mockCallAt[T]` helper (emitted once per file) that does the negative-index resolution. Custom templates can ignore it; it's an implementation detail of `_call(i)`.
+- A private `callIndex` method on each mock that resolves negative indices and panics with a descriptive message on out-of-range access. It's scoped to the mock struct so multiple mocks in the same package don't collide.
 
 The log is appended inside the lock under `--thread-safe`, **before** any handler invocation. A handler that panics still leaves the call recorded.
 
@@ -141,6 +146,8 @@ Methods with no args produce an empty struct (`type ServiceMock_Process_Call str
 
 ```go
 // "was Send called?"
+require.Equal(t, 1, mock.Send_call_count())
+// or
 require.Len(t, mock.Send_calls(), 1)
 
 // "what was passed on the first call?"
@@ -241,7 +248,7 @@ func (this *ServiceMock) Add(one int) string {
 }
 
 func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call { /* defensive copy under lock */ }
-func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call { /* mockCallAt(log, i) under lock */ }
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call { /* delegates to callIndex; negative i counts from end */ }
 func (this *ServiceMock) Add_return_string(value string) { /* ... */ }
 func (this *ServiceMock) Reset_history() { /* zeros every per-method log */ }
 ```
@@ -319,6 +326,7 @@ type SignatureData struct {
 type GetterData struct {
     CallsGetter   GetterMethod   // Method_calls() returns []<MockName>_<MethodName>_Call
     CallByIndex   *GetterMethod  // Method_call(i int) returns one <MockName>_<MethodName>_Call (negative i counts from end)
+    CallCount     *GetterMethod  // Method_call_count() int — sugared len(_calls())
     ReturnSetters []SetterMethod
     HandlerSetter *SetterMethod  // non-nil when --generate-return-handler AND method has returns
 }

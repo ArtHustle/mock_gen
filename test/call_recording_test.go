@@ -112,7 +112,7 @@ type Service interface {
 		lockIdx := strings.Index(body, "this.mu.Lock()")
 		appendIdx := strings.Index(body, "this.send_calls_log = append(")
 		unlockIdx := strings.Index(body, "this.mu.Unlock()")
-		handlerIdx := strings.Index(body, "if handler != nil")
+		handlerIdx := strings.Index(body, "if _handler != nil")
 
 		Expect(lockIdx).To(BeNumerically(">", 0))
 		Expect(appendIdx).To(BeNumerically(">", lockIdx))
@@ -142,13 +142,14 @@ type Service interface {
 
 	// --- negative-index semantics on Method_call(i) ---
 	//
-	// The generated mock emits a `mockCallAt[T]` helper at file scope and
-	// every `Method_call(i int)` delegates to it. We assert both: (a) the
-	// helper is emitted exactly once per generated file and the indexer
-	// delegates to it, and (b) the helper's behavior in isolation (negative
-	// index = offset from end, out-of-range = panic).
+	// Each generated mock has its own unexported `callIndex(length, i int) int`
+	// method that resolves negative indices and panics on out-of-range. We
+	// assert both: (a) the mock has its own callIndex and every Method_call
+	// delegates to it (so multiple mocks in the same package don't collide),
+	// and (b) the resolution behavior — covered by `callIndexTester` in
+	// helpers_test.go, which mirrors the generated method.
 
-	It("emits the mockCallAt helper once and delegates from Method_call", func() {
+	It("emits a per-mock callIndex method that every Method_call delegates to", func() {
 		result, err := GenerateMockContentWithOptions(`
 package pkg
 
@@ -158,32 +159,79 @@ type Service interface {
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(strings.Count(result, "func mockCallAt[T any](log []T, i int) T")).To(Equal(1),
-			"helper must be emitted exactly once per file even with multiple methods")
-		Expect(result).To(ContainSubstring("return mockCallAt(this.send_calls_log, i)"))
-		Expect(result).To(ContainSubstring("return mockCallAt(this.process_calls_log, i)"))
+		Expect(strings.Count(result, "func (this *ServiceMock) callIndex(length, i int) int")).To(Equal(1),
+			"callIndex must be emitted once per mock, regardless of method count")
+		Expect(result).To(ContainSubstring("return this.send_calls_log[this.callIndex(len(this.send_calls_log), i)]"))
+		Expect(result).To(ContainSubstring("return this.process_calls_log[this.callIndex(len(this.process_calls_log), i)]"))
 	})
 
-	DescribeTable("mockCallAt indexing semantics",
-		func(log []int, i int, want int) {
-			Expect(testMockCallAt(log, i)).To(Equal(want))
+	It("emits a distinct callIndex per mock when multiple mocks share a file", func() {
+		result, err := GenerateMockContentWithOptions(`
+package pkg
+
+type A interface { DoA() }
+type B interface { DoB() }`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(result).To(ContainSubstring("func (this *AMock) callIndex(length, i int) int"))
+		Expect(result).To(ContainSubstring("func (this *BMock) callIndex(length, i int) int"))
+	})
+
+	DescribeTable("callIndex resolves valid indices",
+		func(length, i, want int) {
+			Expect(callIndexTester{}.callIndex(length, i)).To(Equal(want))
 		},
-		Entry("i=0 returns first", []int{10, 20, 30}, 0, 10),
-		Entry("i=len-1 returns last", []int{10, 20, 30}, 2, 30),
-		Entry("i=-1 returns last", []int{10, 20, 30}, -1, 30),
-		Entry("i=-2 returns second-to-last", []int{10, 20, 30}, -2, 20),
-		Entry("i=-len returns first", []int{10, 20, 30}, -3, 10),
+		Entry("i=0 returns 0", 3, 0, 0),
+		Entry("i=len-1 returns len-1", 3, 2, 2),
+		Entry("i=-1 returns len-1", 3, -1, 2),
+		Entry("i=-2 returns len-2", 3, -2, 1),
+		Entry("i=-len returns 0", 3, -3, 0),
 	)
 
-	DescribeTable("mockCallAt panics on out-of-range",
-		func(log []int, i int) {
-			Expect(func() { testMockCallAt(log, i) }).To(Panic())
+	DescribeTable("callIndex panics on out-of-range with a descriptive message",
+		func(length, i int, msgSubstring string) {
+			defer func() {
+				r := recover()
+				Expect(r).NotTo(BeNil(), "expected panic")
+				Expect(r.(string)).To(ContainSubstring(msgSubstring))
+			}()
+			callIndexTester{}.callIndex(length, i)
 		},
-		Entry("i past end", []int{10, 20}, 2),
-		Entry("i more negative than -len", []int{10, 20}, -3),
-		Entry("empty log, i=0", []int{}, 0),
-		Entry("empty log, i=-1", []int{}, -1),
+		Entry("positive past end mentions input and length", 2, 5, "call index 5 out of range, log has 2 entries"),
+		Entry("negative beyond -len shows resolution and length", 2, -5, "call index -5 (resolved to -3) out of range, log has 2 entries"),
+		Entry("empty log with i=0 mentions zero entries", 0, 0, "call index 0 out of range, log has 0 entries"),
+		Entry("empty log with i=-1 shows resolution", 0, -1, "call index -1 (resolved to -1) out of range, log has 0 entries"),
 	)
+
+	// --- Method_call_count() sugar ---
+
+	It("emits Method_call_count() returning len of the log", func() {
+		result, err := GenerateMockContentWithOptions(`
+package pkg
+
+type Service interface {
+	Send(x int)
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(result).To(ContainSubstring("func (this *ServiceMock) Send_call_count() int"))
+		Expect(result).To(ContainSubstring("return len(this.send_calls_log)"))
+	})
+
+	It("Method_call_count() takes the mutex under --thread-safe", func() {
+		result, err := GenerateMockContentWithOptions(`
+package pkg
+
+type Service interface {
+	Send(x int)
+}`, Options{MakeThreadSafe: true})
+		Expect(err).NotTo(HaveOccurred())
+
+		body := result[strings.Index(result, "func (this *ServiceMock) Send_call_count()"):]
+		body = body[:strings.Index(body, "\n}\n")]
+		Expect(body).To(ContainSubstring("this.mu.Lock()"))
+		Expect(body).To(ContainSubstring("defer this.mu.Unlock()"))
+	})
 
 	// --- cross-mock uniqueness: two interfaces in one source must produce
 	// distinct Call struct names per (mock, method) pair, so they don't collide

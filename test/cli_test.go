@@ -81,6 +81,105 @@ var _ = Describe("CLI", func() {
 		})
 	})
 
+	// Directory-mode input: when the positional arg is a directory, the CLI
+	// scans every non-test `.go` file in it and generates a mock per source
+	// file that declares at least one interface.
+	Context("when the input is a directory", func() {
+		var tempDir string
+
+		BeforeEach(func() {
+			var err error
+			tempDir, err = os.MkdirTemp(os.TempDir(), "mock_gen_dir_test_")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { os.RemoveAll(tempDir) })
+
+			Expect(os.WriteFile(
+				filepath.Join(tempDir, "go.mod"),
+				[]byte("module dir_test\n\ngo 1.23\n"),
+				0644,
+			)).To(Succeed())
+
+			Expect(os.WriteFile(filepath.Join(tempDir, "a.go"), []byte(`package svc
+
+type A interface {
+	DoA()
+}
+`), 0644)).To(Succeed())
+
+			Expect(os.WriteFile(filepath.Join(tempDir, "b.go"), []byte(`package svc
+
+type B interface {
+	DoB()
+}
+`), 0644)).To(Succeed())
+
+			// types-only file: no interfaces; should not produce a mock.
+			Expect(os.WriteFile(filepath.Join(tempDir, "types.go"), []byte(`package svc
+
+type Config struct {
+	X int
+}
+`), 0644)).To(Succeed())
+
+			// _test.go file: must be ignored even if it contains an interface.
+			Expect(os.WriteFile(filepath.Join(tempDir, "helpers_test.go"), []byte(`package svc
+
+type TestOnly interface {
+	Ignored()
+}
+`), 0644)).To(Succeed())
+		})
+
+		It("generates one mock per source file that declares interfaces", func() {
+			command := exec.Command(mockGeneratorPath, tempDir)
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(0))
+
+			Expect(filepath.Join(tempDir, "test", "a_mock.go")).To(BeAnExistingFile())
+			Expect(filepath.Join(tempDir, "test", "b_mock.go")).To(BeAnExistingFile())
+
+			Expect(filepath.Join(tempDir, "test", "types_mock.go")).NotTo(BeAnExistingFile(),
+				"files without interfaces should not produce a mock")
+			Expect(filepath.Join(tempDir, "test", "helpers_test_mock.go")).NotTo(BeAnExistingFile(),
+				"_test.go files should be ignored")
+
+			aContent, err := os.ReadFile(filepath.Join(tempDir, "test", "a_mock.go"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(aContent)).To(ContainSubstring("type AMock struct"))
+			Expect(string(aContent)).NotTo(ContainSubstring("type BMock"),
+				"per-file output must not include interfaces from other files")
+		})
+
+		It("rejects --output when input is a directory", func() {
+			command := exec.Command(mockGeneratorPath, "--output", "/tmp/whatever.go", tempDir)
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(1))
+		})
+
+		It("exits with code 1 when the directory contains no interfaces", func() {
+			emptyDir, err := os.MkdirTemp(os.TempDir(), "mock_gen_empty_test_")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { os.RemoveAll(emptyDir) })
+
+			Expect(os.WriteFile(
+				filepath.Join(emptyDir, "go.mod"),
+				[]byte("module empty_test\n\ngo 1.23\n"),
+				0644,
+			)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(emptyDir, "x.go"), []byte(`package svc
+
+type Config struct{}
+`), 0644)).To(Succeed())
+
+			command := exec.Command(mockGeneratorPath, emptyDir)
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(1))
+		})
+	})
+
 	// Regression test: when a package has a struct field with the same name as
 	// an interface, findTypeDef must return the TypeName (interface declaration),
 	// not the struct field. Previously this was non-deterministic due to map

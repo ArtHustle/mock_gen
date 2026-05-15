@@ -20,14 +20,9 @@ type Service interface { DoSomething() }`,
 
 package test
 
-// mockCallAt returns log[i], treating negative i as an offset from the end.
-// Out-of-range indices panic (slice semantics).
-func mockCallAt[T any](log []T, i int) T {
-	if i < 0 {
-		i += len(log)
-	}
-	return log[i]
-}
+import (
+	"strconv"
+)
 
 type ServiceMock_DoSomething_Call struct {
 }
@@ -47,11 +42,32 @@ func (this *ServiceMock) DoSomething_calls() []ServiceMock_DoSomething_Call {
 }
 
 func (this *ServiceMock) DoSomething_call(i int) ServiceMock_DoSomething_Call {
-	return mockCallAt(this.doSomething_calls_log, i)
+	return this.doSomething_calls_log[this.callIndex(len(this.doSomething_calls_log), i)]
+}
+
+func (this *ServiceMock) DoSomething_call_count() int {
+	return len(this.doSomething_calls_log)
 }
 
 func (this *ServiceMock) Reset_history() {
 	this.doSomething_calls_log = nil
+}
+
+// callIndex resolves the index argument of a Method_call(i) indexer:
+// negative i counts from the end; out-of-range i panics with a message
+// that surfaces both the original input and the log length.
+func (this *ServiceMock) callIndex(length, i int) int {
+	resolved := i
+	if resolved < 0 {
+		resolved += length
+	}
+	if resolved < 0 || resolved >= length {
+		if i < 0 {
+			panic("ServiceMock call index " + strconv.Itoa(i) + " (resolved to " + strconv.Itoa(resolved) + ") out of range, log has " + strconv.Itoa(length) + " entries")
+		}
+		panic("ServiceMock call index " + strconv.Itoa(i) + " out of range, log has " + strconv.Itoa(length) + " entries")
+	}
+	return resolved
 }
 `, Options{AddHeaderNote: true}),
 	)
