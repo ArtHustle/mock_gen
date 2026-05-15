@@ -27,22 +27,35 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	One int
+}
+
+type ServiceMock_Process_Call struct {
+}
+
 type ServiceMock struct {
-	add_calls         int
+	add_calls_log     []ServiceMock_Add_Call
 	add_param_one     int
 	add_return_string string
 
-	process_calls int
+	process_calls_log []ServiceMock_Process_Call
 }
 
 func (this *ServiceMock) Add(one int) string {
-	this.add_calls++
 	this.add_param_one = one
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
 	return this.add_return_string
 }
 
-func (this *ServiceMock) Add_calls() int {
-	return this.add_calls
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
 }
 
 func (this *ServiceMock) Add_param_one() int {
@@ -54,11 +67,22 @@ func (this *ServiceMock) Add_return_string(value string) {
 }
 
 func (this *ServiceMock) Process() {
-	this.process_calls++
+	this.process_calls_log = append(this.process_calls_log, ServiceMock_Process_Call{})
 }
 
-func (this *ServiceMock) Process_calls() int {
-	return this.process_calls
+func (this *ServiceMock) Process_calls() []ServiceMock_Process_Call {
+	out := make([]ServiceMock_Process_Call, len(this.process_calls_log))
+	copy(out, this.process_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Process_call(i int) ServiceMock_Process_Call {
+	return this.process_calls_log[i]
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
+	this.process_calls_log = nil
 }
 `, Options{MethodAPI: true}),
 
@@ -70,24 +94,34 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+	One int
+}
+
 type ServiceMock struct {
-	add_calls         int
+	add_calls_log     []ServiceMock_Add_Call
 	add_param_one     int
 	add_return        func(int) string
 	add_return_string string
 }
 
 func (this *ServiceMock) Add(one int) string {
-	this.add_calls++
 	this.add_param_one = one
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
 	if this.add_return != nil {
 		return this.add_return(one)
 	}
 	return this.add_return_string
 }
 
-func (this *ServiceMock) Add_calls() int {
-	return this.add_calls
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
 }
 
 func (this *ServiceMock) Add_param_one() int {
@@ -101,6 +135,10 @@ func (this *ServiceMock) Add_return(value func(int) string) {
 func (this *ServiceMock) Add_return_string(value string) {
 	this.add_return_string = value
 }
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
+}
 `, Options{MethodAPI: true, GenerateReturnHandler: true}),
 
 		Entry("multi-return method (no handler)", `
@@ -111,19 +149,28 @@ type Service interface {
 }`,
 			`package test
 
+type ServiceMock_Add_Call struct {
+}
+
 type ServiceMock struct {
-	add_calls         int
+	add_calls_log     []ServiceMock_Add_Call
 	add_return_string string
 	add_return_error  error
 }
 
 func (this *ServiceMock) Add() (string, error) {
-	this.add_calls++
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
 	return this.add_return_string, this.add_return_error
 }
 
-func (this *ServiceMock) Add_calls() int {
-	return this.add_calls
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
 }
 
 func (this *ServiceMock) Add_return_string(value string) {
@@ -132,6 +179,10 @@ func (this *ServiceMock) Add_return_string(value string) {
 
 func (this *ServiceMock) Add_return_error(value error) {
 	this.add_return_error = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
 }
 `, Options{MethodAPI: true}),
 
@@ -149,21 +200,31 @@ import (
 	"net/http"
 )
 
+type ServiceMock_Send_Call struct {
+	R *http.Request
+}
+
 type ServiceMock struct {
-	send_calls           int
+	send_calls_log       []ServiceMock_Send_Call
 	send_param_r         *http.Request
 	send_return_response *http.Response
 	send_return_error    error
 }
 
 func (this *ServiceMock) Send(r *http.Request) (*http.Response, error) {
-	this.send_calls++
 	this.send_param_r = r
+	this.send_calls_log = append(this.send_calls_log, ServiceMock_Send_Call{R: r})
 	return this.send_return_response, this.send_return_error
 }
 
-func (this *ServiceMock) Send_calls() int {
-	return this.send_calls
+func (this *ServiceMock) Send_calls() []ServiceMock_Send_Call {
+	out := make([]ServiceMock_Send_Call, len(this.send_calls_log))
+	copy(out, this.send_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Send_call(i int) ServiceMock_Send_Call {
+	return this.send_calls_log[i]
 }
 
 func (this *ServiceMock) Send_param_r() *http.Request {
@@ -176,6 +237,10 @@ func (this *ServiceMock) Send_return_response(value *http.Response) {
 
 func (this *ServiceMock) Send_return_error(value error) {
 	this.send_return_error = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.send_calls_log = nil
 }
 `, Options{MethodAPI: true}),
 
@@ -190,32 +255,55 @@ type Service interface {
 }`,
 			`package test
 
-type ServiceMock struct {
-	add_calls int
+type ServiceMock_Add_Call struct {
+}
 
-	close_calls        int
+type ServiceMock_Close_Call struct {
+}
+
+type ServiceMock struct {
+	add_calls_log []ServiceMock_Add_Call
+
+	close_calls_log    []ServiceMock_Close_Call
 	close_return_error error
 }
 
 func (this *ServiceMock) Add() {
-	this.add_calls++
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{})
 }
 
-func (this *ServiceMock) Add_calls() int {
-	return this.add_calls
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	return this.add_calls_log[i]
 }
 
 func (this *ServiceMock) Close() error {
-	this.close_calls++
+	this.close_calls_log = append(this.close_calls_log, ServiceMock_Close_Call{})
 	return this.close_return_error
 }
 
-func (this *ServiceMock) Close_calls() int {
-	return this.close_calls
+func (this *ServiceMock) Close_calls() []ServiceMock_Close_Call {
+	out := make([]ServiceMock_Close_Call, len(this.close_calls_log))
+	copy(out, this.close_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Close_call(i int) ServiceMock_Close_Call {
+	return this.close_calls_log[i]
 }
 
 func (this *ServiceMock) Close_return_error(value error) {
 	this.close_return_error = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.add_calls_log = nil
+	this.close_calls_log = nil
 }
 `, Options{MethodAPI: true}),
 	)

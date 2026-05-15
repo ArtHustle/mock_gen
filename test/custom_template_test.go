@@ -467,7 +467,7 @@ type ServiceMock struct {
 }
 
 // Getters for Add:
-//   CallsGetter: Add_calls() int
+//   CallsGetter: Add_calls() []ServiceMock_Add_Call
 //   ParamGetter: Add_param_one() int
 //   ReturnSetter: Add_return_string(string)
 

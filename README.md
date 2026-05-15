@@ -130,12 +130,89 @@ With `--method-api`, fields are unexported and accessed through generated method
 ```go
 mock := &ServiceMock{}
 mock.Add_return_string("hello")       // set via method
-n := mock.Add_calls()                 // read via method
+n := len(mock.Add_calls())            // read via method; Add_calls() returns the full call log
 ```
 
 The motivation is **painless transition to thread-safety**. When you later add `--thread-safe`, the API surface is identical — the same method calls work, only the internals add locking. Tests written against `--method-api` need no changes when concurrency requirements appear.
 
 If you don't need thread-safety yet but think you might later, prefer `--method-api` from the start.
+
+## Call Recording
+
+Under `--method-api` (and therefore also `--thread-safe`), every method gets a full call log. Per method, the generator emits:
+
+- An exported, public-field struct `<MockName>_<MethodName>_Call` holding one entry per call (one field per param, title-cased from the original param name, or type-derived for unnamed params).
+- A `<MethodName>_calls() []<MockName>_<MethodName>_Call` getter returning the whole log (a defensive copy under `--thread-safe`).
+- A `<MethodName>_call(i int) <MockName>_<MethodName>_Call` indexer (panics on out-of-range; standard slice semantics).
+- A single `Reset_history()` on the mock that zeroes every per-method log and counter without touching installed handlers or armed static return values.
+
+The log is appended inside the lock under `--thread-safe`, **before** any handler invocation. A handler that panics still leaves the call recorded.
+
+Methods with no args produce an empty struct (`type ServiceMock_Process_Call struct{}`) and still get the slice-returning getter — the API stays uniform regardless of arity. Variadic params render as a slice (`...int` becomes `Values []int`) — same convention as elsewhere in the generated code.
+
+```go
+// "was Send called?"
+require.Len(t, mock.Send_calls(), 1)
+
+// "what was passed on the first call?"
+c := mock.Send_call(0)
+require.Equal(t, "user@example.com", c.Email.To)
+
+// "all emails sent"
+var emails []string
+for _, c := range mock.Send_calls() {
+    emails = append(emails, c.Email.To)
+}
+
+// reset the log between subtests, keep armed handlers/returns
+mock.Reset_history()
+```
+
+### Breaking change in v0.7.0
+
+`<MethodName>_calls()` previously returned `int` (the call count). It now returns `[]<MockName>_<MethodName>_Call`. The count is `len(mock.Send_calls())`. There is no separate count getter — one method, one return type, two access patterns.
+
+To migrate:
+
+```go
+// before
+require.Equal(t, 1, mock.Send_calls())
+
+// after
+require.Len(t, mock.Send_calls(), 1)
+```
+
+Under the legacy field-API (no `--method-api`, no `--thread-safe`), call recording is **not** generated and the public `<MethodName>_calls int` field is unchanged.
+
+### Migration example: hand-rolled fake → generated mock
+
+A 250-line hand-rolled fake that combined call recording, per-method error injection, per-method return-value override, per-call hooks, and passthrough-to-real-impl collapses to a few lines on a generated `--method-api --thread-safe --generate-return-handler` mock:
+
+```go
+fake := &mocks.RuntimeMock{}
+
+// passthrough fallback
+fake.Activate_return(func(ctx context.Context, t *workflow.Trigger) error {
+    return real.Activate(ctx, t)
+})
+
+// arm an error
+fake.Activate_return_error(errors.New("boom"))
+
+// observation hook + delegate
+fake.Activate_return(func(ctx context.Context, t *workflow.Trigger) error {
+    observeBeforeCall(t)
+    return real.Activate(ctx, t)
+})
+
+// assert
+calls := fake.Activate_calls()
+require.Len(t, calls, 2)
+require.Equal(t, "trig-1", calls[0].T.ID)
+require.Equal(t, "trig-2", calls[1].T.ID)
+```
+
+No `Set*Error`, no `Set*Hook`, no custom `*Calls()` slices, no custom `Reset()` — all of that is generated.
 
 ## Thread-Safe Mocks
 
@@ -146,28 +223,40 @@ mock_gen --thread-safe service.go
 ```
 
 ```go
+type ServiceMock_Add_Call struct {
+	One int
+}
+
 type ServiceMock struct {
 	mu sync.Mutex
 
-	add_calls         int
+	add_calls_log     []ServiceMock_Add_Call
 	add_param_one     int
 	add_return_string string
 }
 
 func (this *ServiceMock) Add(one int) string {
 	this.mu.Lock()
-	this.add_calls++
 	this.add_param_one = one
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
 	_r0 := this.add_return_string
 	this.mu.Unlock()
 
 	return _r0
 }
 
-func (this *ServiceMock) Add_calls() int {
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.add_calls
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.add_calls_log[i]
 }
 
 func (this *ServiceMock) Add_param_one() int {
@@ -181,6 +270,10 @@ func (this *ServiceMock) Add_return_string(value string) {
 	defer this.mu.Unlock()
 	this.add_return_string = value
 }
+
+// Reset_history zeroes every per-method log without touching armed handlers
+// or static return values.
+func (this *ServiceMock) Reset_history() { /* ... */ }
 ```
 
 ### Combining with `--generate-return-handler`
@@ -227,13 +320,17 @@ type InterfaceData struct {
 }
 
 type MethodData struct {
-    Name          string
-    CallsField    string           // e.g., "Add_calls"
-    Params        []FieldData
-    ReturnHandler *ReturnHandlerData // non-nil when --generate-return-handler and method has returns
-    Returns       []FieldData
-    Signature     SignatureData
-    Getters       *GetterData      // non-nil when --thread-safe
+    Name             string
+    CallsField       string           // e.g., "Add_calls" (legacy) or "add_calls" (method-API)
+    CallStructName   string           // e.g., "ServiceMock_Add_Call" — empty under legacy field-API
+    CallStructFields []FieldData      // public title-cased fields, one per param — empty under legacy field-API
+    CallsLogField    string           // e.g., "add_calls_log" — empty under legacy field-API
+    CallByIndexName  string           // e.g., "Add_call" — empty under legacy field-API
+    Params           []FieldData
+    ReturnHandler    *ReturnHandlerData // non-nil when --generate-return-handler and method has returns
+    Returns          []FieldData
+    Signature        SignatureData
+    Getters          *GetterData      // non-nil when --method-api or --thread-safe
 }
 
 type FieldData struct {
@@ -255,7 +352,8 @@ type SignatureData struct {
 }
 
 type GetterData struct {
-    CallsGetter   GetterMethod
+    CallsGetter   GetterMethod   // Method_calls() returns []<MockName>_<MethodName>_Call (slice, not int)
+    CallByIndex   *GetterMethod  // Method_call(i int) returns one <MockName>_<MethodName>_Call
     ParamGetters  []GetterMethod
     ReturnSetters []SetterMethod
     HandlerSetter *SetterMethod  // non-nil when --thread-safe AND --generate-return-handler AND method has returns

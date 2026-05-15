@@ -33,30 +33,45 @@ import (
 	"sync"
 )
 
+type ServiceMock_Add_Call struct {
+	One int
+}
+
+type ServiceMock_Process_Call struct {
+}
+
 type ServiceMock struct {
 	mu sync.Mutex
 
-	add_calls         int
+	add_calls_log     []ServiceMock_Add_Call
 	add_param_one     int
 	add_return_string string
 
-	process_calls int
+	process_calls_log []ServiceMock_Process_Call
 }
 
 func (this *ServiceMock) Add(one int) string {
 	this.mu.Lock()
-	this.add_calls++
 	this.add_param_one = one
+	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
 	_r0 := this.add_return_string
 	this.mu.Unlock()
 
 	return _r0
 }
 
-func (this *ServiceMock) Add_calls() int {
+func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.add_calls
+	out := make([]ServiceMock_Add_Call, len(this.add_calls_log))
+	copy(out, this.add_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Add_call(i int) ServiceMock_Add_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.add_calls_log[i]
 }
 
 func (this *ServiceMock) Add_param_one() int {
@@ -74,13 +89,28 @@ func (this *ServiceMock) Add_return_string(value string) {
 func (this *ServiceMock) Process() {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	this.process_calls++
+	this.process_calls_log = append(this.process_calls_log, ServiceMock_Process_Call{})
 }
 
-func (this *ServiceMock) Process_calls() int {
+func (this *ServiceMock) Process_calls() []ServiceMock_Process_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.process_calls
+	out := make([]ServiceMock_Process_Call, len(this.process_calls_log))
+	copy(out, this.process_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Process_call(i int) ServiceMock_Process_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.process_calls_log[i]
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.add_calls_log = nil
+	this.process_calls_log = nil
 }
 `, Options{MakeThreadSafe: true}),
 
@@ -97,12 +127,19 @@ import (
 	"sync"
 )
 
+type ServiceMock_Process_Call struct {
+}
+
+type ServiceMock_Send_Call struct {
+	One int
+}
+
 type ServiceMock struct {
 	mu sync.Mutex
 
-	process_calls int
+	process_calls_log []ServiceMock_Process_Call
 
-	send_calls        int
+	send_calls_log    []ServiceMock_Send_Call
 	send_param_one    int
 	send_return       func(int) error
 	send_return_error error
@@ -111,19 +148,27 @@ type ServiceMock struct {
 func (this *ServiceMock) Process() {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	this.process_calls++
+	this.process_calls_log = append(this.process_calls_log, ServiceMock_Process_Call{})
 }
 
-func (this *ServiceMock) Process_calls() int {
+func (this *ServiceMock) Process_calls() []ServiceMock_Process_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.process_calls
+	out := make([]ServiceMock_Process_Call, len(this.process_calls_log))
+	copy(out, this.process_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Process_call(i int) ServiceMock_Process_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.process_calls_log[i]
 }
 
 func (this *ServiceMock) Send(one int) error {
 	this.mu.Lock()
-	this.send_calls++
 	this.send_param_one = one
+	this.send_calls_log = append(this.send_calls_log, ServiceMock_Send_Call{One: one})
 	handler := this.send_return
 	_r0 := this.send_return_error
 	this.mu.Unlock()
@@ -134,10 +179,18 @@ func (this *ServiceMock) Send(one int) error {
 	return _r0
 }
 
-func (this *ServiceMock) Send_calls() int {
+func (this *ServiceMock) Send_calls() []ServiceMock_Send_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.send_calls
+	out := make([]ServiceMock_Send_Call, len(this.send_calls_log))
+	copy(out, this.send_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Send_call(i int) ServiceMock_Send_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.send_calls_log[i]
 }
 
 func (this *ServiceMock) Send_param_one() int {
@@ -157,6 +210,13 @@ func (this *ServiceMock) Send_return_error(value error) {
 	defer this.mu.Unlock()
 	this.send_return_error = value
 }
+
+func (this *ServiceMock) Reset_history() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.process_calls_log = nil
+	this.send_calls_log = nil
+}
 `, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
 
 		Entry("with return handler, no params", `
@@ -171,17 +231,20 @@ import (
 	"sync"
 )
 
+type ServiceMock_Get_Call struct {
+}
+
 type ServiceMock struct {
 	mu sync.Mutex
 
-	get_calls         int
+	get_calls_log     []ServiceMock_Get_Call
 	get_return        func() string
 	get_return_string string
 }
 
 func (this *ServiceMock) Get() string {
 	this.mu.Lock()
-	this.get_calls++
+	this.get_calls_log = append(this.get_calls_log, ServiceMock_Get_Call{})
 	handler := this.get_return
 	_r0 := this.get_return_string
 	this.mu.Unlock()
@@ -192,10 +255,18 @@ func (this *ServiceMock) Get() string {
 	return _r0
 }
 
-func (this *ServiceMock) Get_calls() int {
+func (this *ServiceMock) Get_calls() []ServiceMock_Get_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.get_calls
+	out := make([]ServiceMock_Get_Call, len(this.get_calls_log))
+	copy(out, this.get_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Get_call(i int) ServiceMock_Get_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.get_calls_log[i]
 }
 
 func (this *ServiceMock) Get_return(value func() string) {
@@ -208,6 +279,12 @@ func (this *ServiceMock) Get_return_string(value string) {
 	this.mu.Lock()
 	defer this.mu.Unlock()
 	this.get_return_string = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.get_calls_log = nil
 }
 `, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
 
@@ -230,10 +307,15 @@ import (
 	"sync"
 )
 
+type ServiceMock_Do_Call struct {
+	Ctx context.Context
+	R   *http.Request
+}
+
 type ServiceMock struct {
 	mu sync.Mutex
 
-	do_calls           int
+	do_calls_log       []ServiceMock_Do_Call
 	do_param_ctx       context.Context
 	do_param_r         *http.Request
 	do_return          func(context.Context, *http.Request) (*http.Response, error)
@@ -243,9 +325,9 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Do(ctx context.Context, r *http.Request) (*http.Response, error) {
 	this.mu.Lock()
-	this.do_calls++
 	this.do_param_ctx = ctx
 	this.do_param_r = r
+	this.do_calls_log = append(this.do_calls_log, ServiceMock_Do_Call{Ctx: ctx, R: r})
 	handler := this.do_return
 	_r0 := this.do_return_response
 	_r1 := this.do_return_error
@@ -257,10 +339,18 @@ func (this *ServiceMock) Do(ctx context.Context, r *http.Request) (*http.Respons
 	return _r0, _r1
 }
 
-func (this *ServiceMock) Do_calls() int {
+func (this *ServiceMock) Do_calls() []ServiceMock_Do_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.do_calls
+	out := make([]ServiceMock_Do_Call, len(this.do_calls_log))
+	copy(out, this.do_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Do_call(i int) ServiceMock_Do_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.do_calls_log[i]
 }
 
 func (this *ServiceMock) Do_param_ctx() context.Context {
@@ -292,6 +382,12 @@ func (this *ServiceMock) Do_return_error(value error) {
 	defer this.mu.Unlock()
 	this.do_return_error = value
 }
+
+func (this *ServiceMock) Reset_history() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.do_calls_log = nil
+}
 `, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
 
 		Entry("with return handler, variadic param renders as slice", `
@@ -306,10 +402,14 @@ import (
 	"sync"
 )
 
+type ServiceMock_Log_Call struct {
+	Values []int
+}
+
 type ServiceMock struct {
 	mu sync.Mutex
 
-	log_calls        int
+	log_calls_log    []ServiceMock_Log_Call
 	log_param_values []int
 	log_return       func([]int) error
 	log_return_error error
@@ -317,8 +417,8 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Log(values ...int) error {
 	this.mu.Lock()
-	this.log_calls++
 	this.log_param_values = values
+	this.log_calls_log = append(this.log_calls_log, ServiceMock_Log_Call{Values: values})
 	handler := this.log_return
 	_r0 := this.log_return_error
 	this.mu.Unlock()
@@ -329,10 +429,18 @@ func (this *ServiceMock) Log(values ...int) error {
 	return _r0
 }
 
-func (this *ServiceMock) Log_calls() int {
+func (this *ServiceMock) Log_calls() []ServiceMock_Log_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.log_calls
+	out := make([]ServiceMock_Log_Call, len(this.log_calls_log))
+	copy(out, this.log_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Log_call(i int) ServiceMock_Log_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.log_calls_log[i]
 }
 
 func (this *ServiceMock) Log_param_values() []int {
@@ -352,6 +460,12 @@ func (this *ServiceMock) Log_return_error(value error) {
 	defer this.mu.Unlock()
 	this.log_return_error = value
 }
+
+func (this *ServiceMock) Reset_history() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.log_calls_log = nil
+}
 `, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
 
 		Entry("with return handler, named multi-returns drop names in handler type", `
@@ -366,10 +480,14 @@ import (
 	"sync"
 )
 
+type ServiceMock_Fetch_Call struct {
+	Id int
+}
+
 type ServiceMock struct {
 	mu sync.Mutex
 
-	fetch_calls       int
+	fetch_calls_log   []ServiceMock_Fetch_Call
 	fetch_param_id    int
 	fetch_return      func(int) (string, int, error)
 	fetch_return_name string
@@ -379,8 +497,8 @@ type ServiceMock struct {
 
 func (this *ServiceMock) Fetch(id int) (name string, age int, err error) {
 	this.mu.Lock()
-	this.fetch_calls++
 	this.fetch_param_id = id
+	this.fetch_calls_log = append(this.fetch_calls_log, ServiceMock_Fetch_Call{Id: id})
 	handler := this.fetch_return
 	_r0 := this.fetch_return_name
 	_r1 := this.fetch_return_age
@@ -393,10 +511,18 @@ func (this *ServiceMock) Fetch(id int) (name string, age int, err error) {
 	return _r0, _r1, _r2
 }
 
-func (this *ServiceMock) Fetch_calls() int {
+func (this *ServiceMock) Fetch_calls() []ServiceMock_Fetch_Call {
 	this.mu.Lock()
 	defer this.mu.Unlock()
-	return this.fetch_calls
+	out := make([]ServiceMock_Fetch_Call, len(this.fetch_calls_log))
+	copy(out, this.fetch_calls_log)
+	return out
+}
+
+func (this *ServiceMock) Fetch_call(i int) ServiceMock_Fetch_Call {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.fetch_calls_log[i]
 }
 
 func (this *ServiceMock) Fetch_param_id() int {
@@ -427,6 +553,12 @@ func (this *ServiceMock) Fetch_return_err(value error) {
 	this.mu.Lock()
 	defer this.mu.Unlock()
 	this.fetch_return_err = value
+}
+
+func (this *ServiceMock) Reset_history() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.fetch_calls_log = nil
 }
 `, Options{MakeThreadSafe: true, GenerateReturnHandler: true}),
 	)

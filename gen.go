@@ -207,13 +207,17 @@ type InterfaceData struct {
 }
 
 type MethodData struct {
-	Name          string
-	CallsField    string
-	Params        []FieldData
-	ReturnHandler *ReturnHandlerData
-	Returns       []FieldData
-	Signature     SignatureData
-	Getters       *GetterData
+	Name             string
+	CallsField       string
+	CallStructName   string
+	CallStructFields []FieldData
+	CallsLogField    string
+	CallByIndexName  string
+	Params           []FieldData
+	ReturnHandler    *ReturnHandlerData
+	Returns          []FieldData
+	Signature        SignatureData
+	Getters          *GetterData
 }
 
 type FieldData struct {
@@ -236,6 +240,7 @@ type SignatureData struct {
 
 type GetterData struct {
 	CallsGetter   GetterMethod
+	CallByIndex   *GetterMethod
 	ParamGetters  []GetterMethod
 	ReturnSetters []SetterMethod
 	HandlerSetter *SetterMethod
@@ -590,14 +595,14 @@ func (this *generator) collectInterfaceData(name string, iface *types.Interface)
 
 	for i := range iface.NumMethods() {
 		method := iface.Method(i)
-		methodData := this.collectMethodData(method)
+		methodData := this.collectMethodData(method, ifaceData.MockName)
 		ifaceData.Methods = append(ifaceData.Methods, methodData)
 	}
 
 	return ifaceData
 }
 
-func (this *generator) collectMethodData(method *types.Func) MethodData {
+func (this *generator) collectMethodData(method *types.Func, mockName string) MethodData {
 	sig := method.Type().(*types.Signature)
 
 	callsFieldName := method.Name() + "_calls"
@@ -610,6 +615,24 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 		CallsField: callsFieldName,
 		Params:     []FieldData{},
 		Returns:    []FieldData{},
+	}
+
+	if this.options.UseMethodAPI() {
+		methodLower := strings.ToLower(method.Name()[0:1]) + method.Name()[1:]
+		methodData.CallStructName = mockName + "_" + method.Name() + "_Call"
+		methodData.CallsLogField = methodLower + "_calls_log"
+		methodData.CallByIndexName = method.Name() + "_call"
+		methodData.CallStructFields = []FieldData{}
+		for j := range sig.Params().Len() {
+			param := sig.Params().At(j)
+			rawFieldName := getParamMember(method, j)
+			suffix := rawFieldName[len(method.Name()+"_param_"):]
+			fieldName := toTitle(suffix)
+			methodData.CallStructFields = append(methodData.CallStructFields, FieldData{
+				Name: fieldName,
+				Type: this.getFieldType(param.Type()),
+			})
+		}
 	}
 
 	for j := range sig.Params().Len() {
@@ -656,7 +679,7 @@ func (this *generator) collectMethodData(method *types.Func) MethodData {
 	methodData.Signature = this.collectSignatureData(method, sig)
 
 	if this.options.UseMethodAPI() {
-		methodData.Getters = this.collectGetterData(method, sig)
+		methodData.Getters = this.collectGetterData(method, sig, methodData.CallStructName, methodData.CallsLogField)
 	}
 
 	return methodData
@@ -722,17 +745,21 @@ func (this *generator) collectSignatureData(method *types.Func, sig *types.Signa
 	}
 }
 
-func (this *generator) collectGetterData(method *types.Func, sig *types.Signature) *GetterData {
+func (this *generator) collectGetterData(method *types.Func, sig *types.Signature, callStructName, callsLogField string) *GetterData {
 	getterData := &GetterData{
 		ParamGetters:  []GetterMethod{},
 		ReturnSetters: []SetterMethod{},
 	}
 
-	callsFieldNameLower := strings.ToLower(method.Name()[0:1]) + method.Name()[1:] + "_calls"
 	getterData.CallsGetter = GetterMethod{
 		MethodName: method.Name() + "_calls",
-		FieldName:  callsFieldNameLower,
-		ReturnType: "int",
+		FieldName:  callsLogField,
+		ReturnType: "[]" + callStructName,
+	}
+	getterData.CallByIndex = &GetterMethod{
+		MethodName: method.Name() + "_call",
+		FieldName:  callsLogField,
+		ReturnType: callStructName,
 	}
 
 	for j := range sig.Params().Len() {
