@@ -38,28 +38,28 @@ package svc
 
 type Service interface {
 	Run(handler func(int) error) error
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		Entry("param named _handler doesn't collide with __mockHandler", `
 package svc
 
 type Service interface {
 	Run(_handler func(int) error) error
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		Entry("param named _r0 doesn't collide with __mockR0", `
 package svc
 
 type Service interface {
 	Get(_r0 int) (string, error)
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		Entry("multiple snapshot-shadowing names at once", `
 package svc
 
 type Service interface {
 	Do(_handler func() error, _r0 int, _r1 string) (int, string, error)
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		// --- callIndex-body local names as user params ---
 
@@ -68,7 +68,7 @@ package svc
 
 type Service interface {
 	Lookup(i, length, resolved int) int
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		// --- inline types (regression for #18) ---
 
@@ -77,21 +77,21 @@ package svc
 
 type Service interface {
 	Done() <-chan struct{}
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		Entry("empty interface{} param", `
 package svc
 
 type Service interface {
 	Process(v interface{}) error
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		Entry("inline struct with fields", `
 package svc
 
 type Service interface {
 	Configure(opts struct{ Host string; Port int }) error
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 
 		// --- cross-mock package-level collisions ---
 
@@ -99,7 +99,7 @@ type Service interface {
 package svc
 
 type A interface { DoA(x int) error }
-type B interface { DoB(y string) error }`, Options{MakeThreadSafe: true}),
+type B interface { DoB(y string) error }`, Options{Async: true}),
 
 		// --- realistic interface combining many features ---
 
@@ -119,7 +119,7 @@ type Runtime interface {
 	Activate(ctx context.Context, id string) error
 	Fetch(ctx context.Context, ids ...string) (events []Event, total int, err error)
 	Subscribe(ctx context.Context, topics []string, handler func(Event) error) (cancel func(), err error)
-}`, Options{MakeThreadSafe: true}),
+}`, Options{Async: true}),
 	)
 })
 

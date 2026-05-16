@@ -32,7 +32,7 @@ If running the generator would produce a file byte-identical to what's already o
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--output` | `-o` | Custom output file path (single-file mode only) |
-| `--thread-safe` | | Wraps every method with a `sync.Mutex`; getters/setters take the lock. Methods that return values use the snapshot pattern (lock, mutate, snapshot, unlock, run handler/return) so user code never runs under the lock. |
+| `--async` | | Makes the mock safe for use from goroutines: `sync.Mutex` guards all generated state; methods with returns use the snapshot pattern so user code never runs under the lock; every `Calls()` namespace gains `WaitForCount(n, timeout)` and `WaitForCall(predicate, timeout)` for asserting on calls made by background goroutines. |
 | `--inspect-entry` | | Override the inspection entry name (default `Calls`). Use when the source interface has a method named `Calls`. |
 | `--config-entry` | | Override the configuration entry name (default `On`). Use when the source interface has a method named `On`. |
 | `--template` | `-t` | Path to a custom Go `text/template` file for code generation |
@@ -55,7 +55,7 @@ type Service interface {
 Running:
 
 ```shell
-mock_gen --thread-safe service.go
+mock_gen --async service.go
 ```
 
 Produces a mock in `./test/service_mock.go` that you use like this:
@@ -136,11 +136,30 @@ require.Equal(t, "user@x.com", last.Param.Email)
 require.NoError(t, last.Return.Err)
 ```
 
-## Thread-safe mocks
+## Async-safe mocks
 
-With `--thread-safe`, a `sync.Mutex` is added and all generated state is guarded. Methods with returns use the snapshot pattern: lock, append the call + snapshot config, unlock, run handler / fall back to static returns, lock, write the `Return` back into the recorded entry, unlock. The lock is never held while user code (handler) runs.
+With `--async`, the mock is safe to use from goroutines:
 
-The exported API surface is identical with or without `--thread-safe`; flipping it on only adds internal locking.
+- A `sync.Mutex` guards all generated state. The exported API is identical with or without `--async` — flipping it on only adds internal locking and the WaitFor* methods below.
+- Methods with returns use the snapshot pattern: lock, append the call + snapshot config, unlock, run handler / fall back to static returns, lock, write the `Return` back into the recorded entry, unlock. The lock is never held while user code (handler) runs.
+- Every per-method `Calls()` namespace gains two waiters for asserting on calls made by background goroutines:
+
+```go
+// Block until at least 3 calls have been recorded (or 100ms elapses).
+if err := mock.Calls().Send().WaitForCount(3, 100*time.Millisecond); err != nil {
+    t.Fatal(err)
+}
+
+// Block until a call matches a predicate. Predicate sees both Param and Return.
+err := mock.Calls().Send().WaitForCall(
+    func(c ServiceMockSendCall) bool {
+        return c.Param.Email == "target@x.com" && c.Return.Err == nil
+    },
+    100*time.Millisecond,
+)
+```
+
+Both poll every 1ms. On timeout they return a descriptive `error` (not `panic`) so tests can do inverse assertions ("should NOT be called within X").
 
 ```go
 mock := test.NewServiceMock()
@@ -216,7 +235,7 @@ See `DefaultTemplate()` for the built-in template — copy it and modify to cust
 Add a `//go:generate` directive at the top of each source file containing interfaces you want to mock:
 
 ```go
-//go:generate mock_gen --thread-safe $GOFILE
+//go:generate mock_gen --async $GOFILE
 
 package service
 
@@ -234,7 +253,7 @@ go generate ./...
 For a whole-tree regeneration without per-file directives, the CLI's recursive mode works directly:
 
 ```shell
-mock_gen --thread-safe ./...
+mock_gen --async ./...
 ```
 
 This walks the current directory recursively, generates one mock per source file that declares at least one interface, and writes each into a sibling `test/` directory. Directories named `test`, `vendor`, `node_modules`, or beginning with `.` are skipped (they don't get re-fed as input). Generated files are byte-compared before writing — unchanged files are not rewritten, preserving mtime for build caches.
@@ -245,7 +264,7 @@ This walks the current directory recursively, generates one mock per source file
 import mock_gen "github.com/ArtHustle/mock_gen"
 
 content, err := mock_gen.GenerateMockFileWithOptions("service.go", mock_gen.Options{
-    MakeThreadSafe: true,
+    Async: true,
     AddHeaderNote:  true,
 })
 
@@ -254,6 +273,8 @@ content, err := mock_gen.GenerateMockContentWithOptions(sourceCode, mock_gen.Opt
 ```
 
 ## Versioning
+
+v0.10.0 renamed `--thread-safe` to `--async` (and `Options.MakeThreadSafe` to `Options.Async`). Behavior under the old flag is unchanged; under the new flag, every `Calls()` namespace also gains `WaitForCount(n, timeout)` and `WaitForCall(predicate, timeout)`. Migration: `s/--thread-safe/--async/g` in `//go:generate` directives, `s/MakeThreadSafe/Async/g` in programmatic uses.
 
 v0.9.0 is a complete API rewrite from v0.8.x. The old snake-case accessors (`Send_calls()`, `Send_call(i)`, `Send_return(handler)`) are gone. Migration:
 

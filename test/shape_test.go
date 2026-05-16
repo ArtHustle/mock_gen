@@ -27,7 +27,11 @@ import (
 )
 
 // ServiceMockProcessCall records one call to Service.Process.
+// Index is the 0-based position of this call in the per-method log, useful
+// for ordering assertions in WaitForCall predicates and All() iteration.
+// Index resets to 0 when the log is cleared via Reset.
 type ServiceMockProcessCall struct {
+	Index  int
 	Param  ServiceMockProcessParam
 	Return ServiceMockProcessReturn
 }
@@ -55,6 +59,7 @@ func NewServiceMock() *ServiceMock {
 
 func (this *ServiceMock) Process() {
 	this.processLog = append(this.processLog, ServiceMockProcessCall{
+		Index: len(this.processLog),
 		Param: ServiceMockProcessParam{},
 	})
 }
@@ -167,12 +172,18 @@ type Service interface {
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // ServiceMockSendCall records one call to Service.Send.
+// Index is the 0-based position of this call in the per-method log, useful
+// for ordering assertions in WaitForCall predicates and All() iteration.
+// Index resets to 0 when the log is cleared via Reset.
 type ServiceMockSendCall struct {
+	Index  int
 	Param  ServiceMockSendParam
 	Return ServiceMockSendReturn
 }
@@ -210,6 +221,7 @@ func NewServiceMock() *ServiceMock {
 func (this *ServiceMock) Send(ctx context.Context, email string) (id string, err error) {
 	this.mu.Lock()
 	this.sendLog = append(this.sendLog, ServiceMockSendCall{
+		Index: len(this.sendLog),
 		Param: ServiceMockSendParam{Ctx: ctx, Email: email},
 	})
 	__mockCallIdx := len(this.sendLog) - 1
@@ -299,6 +311,41 @@ func (this serviceMockSendCalls) Reset() {
 	this.m.sendLog = nil
 }
 
+// WaitForCount blocks until at least n calls to Send have been
+// recorded, or until timeout elapses. Returns nil on success, an error
+// describing the current count on timeout. Polls every 1ms.
+func (this serviceMockSendCalls) WaitForCount(n int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if this.Count() >= n {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// WaitForCall blocks until at least one recorded call to Send
+// satisfies the predicate, or until timeout elapses. Returns nil on
+// success, an error on timeout. Polls every 1ms; on each poll, scans every
+// recorded call from oldest to newest.
+func (this serviceMockSendCalls) WaitForCall(predicate func(ServiceMockSendCall) bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, c := range this.All() {
+			if predicate(c) {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 type serviceMockOn struct{ m *ServiceMock }
 
 // On returns the configuration namespace — one method per
@@ -375,7 +422,7 @@ func (this *ServiceMock) callIndex(length, i int) int {
 	}
 	return resolved
 }
-`, Options{MakeThreadSafe: true}),
+`, Options{Async: true}),
 
 		Entry("with header note", `
 package pkg
@@ -391,7 +438,11 @@ import (
 )
 
 // ServiceMockDoSomethingCall records one call to Service.DoSomething.
+// Index is the 0-based position of this call in the per-method log, useful
+// for ordering assertions in WaitForCall predicates and All() iteration.
+// Index resets to 0 when the log is cleared via Reset.
 type ServiceMockDoSomethingCall struct {
+	Index  int
 	Param  ServiceMockDoSomethingParam
 	Return ServiceMockDoSomethingReturn
 }
@@ -419,6 +470,7 @@ func NewServiceMock() *ServiceMock {
 
 func (this *ServiceMock) DoSomething() {
 	this.doSomethingLog = append(this.doSomethingLog, ServiceMockDoSomethingCall{
+		Index: len(this.doSomethingLog),
 		Param: ServiceMockDoSomethingParam{},
 	})
 }

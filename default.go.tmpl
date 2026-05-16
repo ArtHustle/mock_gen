@@ -11,7 +11,11 @@
    Emitted at file scope so they're public consumption types.
    =========================================================== */}}
 {{range $method := $iface.Methods}}// {{$method.CallType}} records one call to {{$iface.Name}}.{{$method.Name}}.
+// Index is the 0-based position of this call in the per-method log, useful
+// for ordering assertions in WaitForCall predicates and All() iteration.
+// Index resets to 0 when the log is cleared via Reset.
 type {{$method.CallType}} struct {
+	Index  int
 	Param  {{$method.ParamType}}
 	Return {{$method.ReturnType}}
 }
@@ -31,7 +35,7 @@ type {{$method.CfgType}} struct {
 
 {{end}}{{/* ===== Mock struct ===== */}}
 type {{$iface.MockName}} struct {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	mu sync.Mutex
 {{end}}{{range $method := $iface.Methods}}
 	{{$method.LogField}} []{{$method.CallType}}
@@ -48,15 +52,16 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 {{/* ===== Interface methods ===== */}}
 {{range $method := $iface.Methods}}func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
 {{- if $method.ReturnFields}}
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.mu.Lock()
 {{end}}	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
+		Index: len(this.{{$method.LogField}}),
 		Param: {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
 	})
 	__mockCallIdx := len(this.{{$method.LogField}}) - 1
 	__mockHandler := this.{{$method.CfgField}}.{{$method.HandlerFieldName}}
 {{range $i, $rf := $method.CfgReturnFields}}	__mockR{{$i}} := this.{{$method.CfgField}}.{{$rf.Name}}
-{{end}}{{- if $.Options.MakeThreadSafe}}	this.mu.Unlock()
+{{end}}{{- if $.Options.Async}}	this.mu.Unlock()
 
 {{end}}{{range $i, $rf := $method.ReturnFields}}	var __mockRet{{$i}} {{$rf.Type}}
 {{end}}	if __mockHandler != nil {
@@ -65,24 +70,25 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 		{{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}} = {{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockR{{$i}}{{end}}
 	}
 
-{{if $.Options.MakeThreadSafe}}	this.mu.Lock()
+{{if $.Options.Async}}	this.mu.Lock()
 {{end}}	this.{{$method.LogField}}[__mockCallIdx].Return = {{$method.ReturnType}}{ {{- range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}{{$rf.Name}}: __mockRet{{$i}}{{end}} }
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.mu.Unlock()
 {{end}}
 	return {{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}}
 {{else}}
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
 {{end}}	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
+		Index: len(this.{{$method.LogField}}),
 		Param: {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
 	})
 {{end}}}
 
 {{end}}{{/* ===== Reset (mock-level) ===== */}}
 func (this *{{$iface.MockName}}) Reset() {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
 {{end}}{{range $method := $iface.Methods}}	this.{{$method.LogField}} = nil
@@ -101,7 +107,7 @@ func (this *{{$iface.MockName}}) {{$iface.InspectEntryName}}() {{$iface.InspectT
 // Reset clears every per-method call log on the mock without touching
 // configured returns or installed handlers.
 func (this {{$iface.InspectType}}) Reset() {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}{{range $method := $iface.Methods}}	this.m.{{$method.LogField}} = nil
@@ -116,7 +122,7 @@ func (this {{$iface.InspectType}}) Reset() {
 
 // Count returns the number of recorded calls to {{$iface.Name}}.{{$method.Name}}.
 func (this {{$method.InspectMethodType}}) Count() int {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	return len(this.m.{{$method.LogField}})
@@ -126,7 +132,7 @@ func (this {{$method.InspectMethodType}}) Count() int {
 // Panics on out-of-range with a message that surfaces both the input
 // and the log length.
 func (this {{$method.InspectMethodType}}) At(i int) {{$method.CallType}} {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	return this.m.{{$method.LogField}}[this.m.callIndex(len(this.m.{{$method.LogField}}), i)]
@@ -139,7 +145,7 @@ func (this {{$method.InspectMethodType}}) Last() {{$method.CallType}} {
 
 // All returns a defensive copy of the full call log.
 func (this {{$method.InspectMethodType}}) All() []{{$method.CallType}} {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	out := make([]{{$method.CallType}}, len(this.m.{{$method.LogField}}))
@@ -149,13 +155,48 @@ func (this {{$method.InspectMethodType}}) All() []{{$method.CallType}} {
 
 // Reset clears the call log for {{$method.Name}}.
 func (this {{$method.InspectMethodType}}) Reset() {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	this.m.{{$method.LogField}} = nil
 }
 
-{{end}}{{/* ===== Configuration namespace ===== */}}
+{{if $.Options.Async}}// WaitForCount blocks until at least n calls to {{$method.Name}} have been
+// recorded, or until timeout elapses. Returns nil on success, an error
+// describing the current count on timeout. Polls every 1ms.
+func (this {{$method.InspectMethodType}}) WaitForCount(n int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if this.Count() >= n {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// WaitForCall blocks until at least one recorded call to {{$method.Name}}
+// satisfies the predicate, or until timeout elapses. Returns nil on
+// success, an error on timeout. Polls every 1ms; on each poll, scans every
+// recorded call from oldest to newest.
+func (this {{$method.InspectMethodType}}) WaitForCall(predicate func({{$method.CallType}}) bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, c := range this.All() {
+			if predicate(c) {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+{{end}}{{end}}{{/* ===== Configuration namespace ===== */}}
 type {{$iface.ConfigType}} struct{ m *{{$iface.MockName}} }
 
 // {{$iface.ConfigEntryName}} returns the configuration namespace — one method per
@@ -167,7 +208,7 @@ func (this *{{$iface.MockName}}) {{$iface.ConfigEntryName}}() {{$iface.ConfigTyp
 // Reset clears configured returns and installed handlers for every method
 // on the mock, without touching the call log.
 func (this {{$iface.ConfigType}}) Reset() {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}{{range $method := $iface.Methods}}	this.m.{{$method.CfgField}} = {{$method.CfgType}}{}
@@ -183,7 +224,7 @@ func (this {{$iface.ConfigType}}) Reset() {
 {{if $method.ReturnFields}}// Returns sets all static return values for {{$method.Name}}.
 // Used when no Handler is installed.
 func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $i, $rf := $method.CfgReturnFields}}{{if $i}}, {{end}}{{$rf.Name}} {{$rf.Type}}{{end}}) {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}{{range $method.CfgReturnFields}}	this.m.{{$method.CfgField}}.{{.Name}} = {{.Name}}
@@ -191,7 +232,7 @@ func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $
 
 {{range $method.IndividualReturnSetters}}// {{.MethodName}} overrides just the {{.FieldName}} return value.
 func (this {{$method.ConfigMethodType}}) {{.MethodName}}(value {{.ParamType}}) {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	this.m.{{$method.CfgField}}.{{.FieldName}} = value
@@ -200,7 +241,7 @@ func (this {{$method.ConfigMethodType}}) {{.MethodName}}(value {{.ParamType}}) {
 {{end}}// Handler installs a dynamic function called instead of returning the
 // configured static values.
 func (this {{$method.ConfigMethodType}}) Handler(value {{$method.HandlerType}}) {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	this.m.{{$method.CfgField}}.{{$method.HandlerFieldName}} = value
@@ -208,7 +249,7 @@ func (this {{$method.ConfigMethodType}}) Handler(value {{$method.HandlerType}}) 
 
 {{end}}// Reset clears configured returns and installed handler for {{$method.Name}}.
 func (this {{$method.ConfigMethodType}}) Reset() {
-{{- if $.Options.MakeThreadSafe}}
+{{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	this.m.{{$method.CfgField}} = {{$method.CfgType}}{}

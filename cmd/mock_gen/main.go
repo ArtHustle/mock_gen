@@ -85,7 +85,7 @@ func listSourceFiles(dir string) ([]string, error) {
 func main() {
 	var outputFile string
 	var templateFile string
-	var threadSafe bool
+	var async bool
 	var noHeaderNote bool
 	var inspectEntry string
 	var configEntry string
@@ -104,7 +104,7 @@ mocks are placed in a "test" subdirectory by default.
 Examples:
   mock_gen service.go
   mock_gen --output mocks/service_mock.go service.go
-  mock_gen --thread-safe service.go
+  mock_gen --async service.go
   mock_gen --inspect-entry Inspect --config-entry Configure service.go
   mock_gen ./internal/service`,
 		Args: cobra.ExactArgs(1),
@@ -122,7 +122,7 @@ Examples:
 			}
 
 			opts := mock_gen.Options{
-				MakeThreadSafe: threadSafe,
+				Async:          async,
 				AddHeaderNote:  !noHeaderNote,
 				CustomTemplate: customTemplate,
 				InspectEntry:   inspectEntry,
@@ -171,8 +171,10 @@ Examples:
 			"(imports, interface names, methods, params, returns, signatures). "+
 			"Output is run through gofmt, so it must produce valid Go. "+
 			"Use mock_gen.DefaultTemplate() programmatically to get the built-in template as a starting point.")
-	rootCmd.Flags().BoolVar(&threadSafe, "thread-safe", false,
-		"If set, adds a mutex to the mock struct and uses it to make all methods thread-safe")
+	rootCmd.Flags().BoolVar(&async, "async", false,
+		"If set, makes the mock safe for concurrent use (sync.Mutex around all "+
+			"state) and emits WaitForCount/WaitForCall on every Calls() namespace "+
+			"for asserting on calls made from goroutines.")
 	rootCmd.Flags().StringVar(&inspectEntry, "inspect-entry", "",
 		"Override the inspection namespace entry method name (default: Calls). "+
 			"Use this when the source interface has a method named Calls.")

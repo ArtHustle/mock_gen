@@ -257,6 +257,55 @@ type Config struct{}
 		})
 	})
 
+	// The --async flag renamed --thread-safe in v0.10.0. Make sure the new
+	// flag actually parses end-to-end and the old one is rejected so users
+	// running outdated `//go:generate` directives get a clean error.
+	Context("--async flag (v0.10.0 rename of --thread-safe)", func() {
+		var tempDir, srcPath string
+
+		BeforeEach(func() {
+			var err error
+			tempDir, err = os.MkdirTemp(os.TempDir(), "mock_gen_async_test_")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { os.RemoveAll(tempDir) })
+
+			Expect(os.WriteFile(
+				filepath.Join(tempDir, "go.mod"),
+				[]byte("module async_test\n\ngo 1.23\n"),
+				0644,
+			)).To(Succeed())
+
+			srcPath = filepath.Join(tempDir, "svc.go")
+			Expect(os.WriteFile(srcPath, []byte(`package svc
+
+type Service interface {
+	Send(x int) error
+}
+`), 0644)).To(Succeed())
+		})
+
+		It("--async parses and produces an async-shaped mock", func() {
+			command := exec.Command(mockGeneratorPath, "--async", srcPath)
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(0))
+
+			out, err := os.ReadFile(filepath.Join(tempDir, "test", "svc_mock.go"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(out)).To(ContainSubstring("sync.Mutex"),
+				"--async should emit a mutex")
+			Expect(string(out)).To(ContainSubstring("WaitForCount"),
+				"--async should emit WaitForCount")
+		})
+
+		It("rejects the old --thread-safe flag with a clean error", func() {
+			command := exec.Command(mockGeneratorPath, "--thread-safe", srcPath)
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(1))
+		})
+	})
+
 	// Recursive `./...` mode: scan a directory tree, generating one mock per
 	// source file with at least one interface, per package directory. (#3)
 	Context("when the input ends in /...", func() {

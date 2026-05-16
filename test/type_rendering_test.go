@@ -467,6 +467,41 @@ type Service interface {
 		Expect(out).To(ContainSubstring("handler func(int) (string, int, error)"))
 	})
 
+	// --- async-gated emission ---
+
+	It("WaitForCount and WaitForCall methods are NOT emitted without --async", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
+
+type Service interface {
+	Send(x int) error
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		// Check for the method declarations specifically, not mere mentions
+		// (the Call struct's doc comment references WaitForCall as a use case
+		// for the Index field).
+		Expect(out).NotTo(ContainSubstring(") WaitForCount("),
+			"WaitForCount method must only be emitted under --async")
+		Expect(out).NotTo(ContainSubstring(") WaitForCall("),
+			"WaitForCall method must only be emitted under --async")
+		// No `time` or `errors` imports either when not needed.
+		Expect(out).NotTo(ContainSubstring(`"time"`))
+		Expect(out).NotTo(ContainSubstring(`"errors"`))
+	})
+
+	It("WaitForCount and WaitForCall ARE emitted with --async, on every Calls() namespace", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
+
+type Service interface {
+	Send(x int) error
+	Close() error
+}`, Options{Async: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("func (this serviceMockSendCalls) WaitForCount(n int, timeout time.Duration) error"))
+		Expect(out).To(ContainSubstring("func (this serviceMockSendCalls) WaitForCall(predicate func(ServiceMockSendCall) bool, timeout time.Duration) error"))
+		Expect(out).To(ContainSubstring("func (this serviceMockCloseCalls) WaitForCount("))
+		Expect(out).To(ContainSubstring("func (this serviceMockCloseCalls) WaitForCall("))
+	})
+
 	It("non-empty inline interface renders methods inline", func() {
 		out, err := GenerateMockContentWithOptions(`package pkg
 

@@ -489,7 +489,7 @@ defer func() {
 }()
 
 m.Send("boom@x.com")
-`, Options{MakeThreadSafe: true})
+`, Options{Async: true})
 	})
 
 	// --- multi-mock isolation in the same source/package ---
@@ -549,7 +549,257 @@ if m.Calls().Greet().Count() != 1 || m.Calls().Close().Count() != 1 {
 `, Options{})
 	})
 
-	// --- thread-safe variant: same semantics, no race ---
+	// --- async: WaitForCount / WaitForCall ---
+
+	It("WaitForCount blocks until n calls have been recorded", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(x int) error
+}`, `
+m := &ServiceMock{}
+go func() {
+	timePkg.Sleep(5 * timePkg.Millisecond)
+	m.Send(1)
+	timePkg.Sleep(5 * timePkg.Millisecond)
+	m.Send(2)
+}()
+if err := m.Calls().Send().WaitForCount(2, 200*timePkg.Millisecond); err != nil {
+	t.Fatalf("WaitForCount: %v", err)
+}
+if got := m.Calls().Send().Count(); got != 2 {
+	t.Fatalf("Count = %d, want 2", got)
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
+	It("WaitForCount returns immediately when the count is already satisfied", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(x int) error
+}`, `
+m := &ServiceMock{}
+m.Send(1)
+m.Send(2)
+start := timePkg.Now()
+if err := m.Calls().Send().WaitForCount(2, 200*timePkg.Millisecond); err != nil {
+	t.Fatalf("WaitForCount: %v", err)
+}
+if elapsed := timePkg.Since(start); elapsed > 50*timePkg.Millisecond {
+	t.Fatalf("WaitForCount blocked %v, should return immediately when satisfied", elapsed)
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
+	It("WaitForCount returns a descriptive error on timeout", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(x int) error
+}`, `
+m := &ServiceMock{}
+m.Send(1)
+err := m.Calls().Send().WaitForCount(5, 30*timePkg.Millisecond)
+if err == nil {
+	t.Fatal("expected timeout error")
+}
+msg := err.Error()
+if !stringsPkg.Contains(msg, "WaitForCount") || !stringsPkg.Contains(msg, "count = 1") {
+	t.Fatalf("error message %q should mention WaitForCount and current count", msg)
+}
+`, Options{Async: true}, `import timePkg "time"`, `import stringsPkg "strings"`)
+	})
+
+	It("WaitForCall blocks until a call matches the predicate", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) error
+}`, `
+m := &ServiceMock{}
+go func() {
+	timePkg.Sleep(5 * timePkg.Millisecond)
+	m.Send("ignored")
+	timePkg.Sleep(5 * timePkg.Millisecond)
+	m.Send("target@x.com")
+}()
+err := m.Calls().Send().WaitForCall(
+	func(c ServiceMockSendCall) bool { return c.Param.Email == "target@x.com" },
+	200*timePkg.Millisecond,
+)
+if err != nil {
+	t.Fatalf("WaitForCall: %v", err)
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
+	It("WaitForCall predicate can read recorded Return values", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) (id string, err error)
+}`, `
+m := &ServiceMock{}
+n := 0
+m.On().Send().Handler(func(email string) (string, error) {
+	n++
+	if n == 1 {
+		return "", errorsNew("first-fail")
+	}
+	return "ok-" + email, nil
+})
+go func() {
+	m.Send("a")
+	m.Send("b")
+}()
+err := m.Calls().Send().WaitForCall(
+	func(c ServiceMockSendCall) bool { return c.Return.Err == nil && c.Return.Id != "" },
+	200*timePkg.Millisecond,
+)
+if err != nil {
+	t.Fatalf("WaitForCall: %v", err)
+}
+`, Options{Async: true}, `import timePkg "time"`, `import errorsPkg "errors"`, `var errorsNew = errorsPkg.New`)
+	})
+
+	It("WaitForCall returns a descriptive error on timeout", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) error
+}`, `
+m := &ServiceMock{}
+m.Send("a")
+err := m.Calls().Send().WaitForCall(
+	func(c ServiceMockSendCall) bool { return c.Param.Email == "never@x.com" },
+	30*timePkg.Millisecond,
+)
+if err == nil {
+	t.Fatal("expected timeout error")
+}
+if !stringsPkg.Contains(err.Error(), "WaitForCall") {
+	t.Fatalf("error %q should mention WaitForCall", err.Error())
+}
+`, Options{Async: true}, `import timePkg "time"`, `import stringsPkg "strings"`)
+	})
+
+	It("each recorded call carries its 0-based Index in the log", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) error
+}`, `
+m := &ServiceMock{}
+m.Send("a")
+m.Send("b")
+m.Send("c")
+
+calls := m.Calls().Send().All()
+if calls[0].Index != 0 || calls[1].Index != 1 || calls[2].Index != 2 {
+	t.Fatalf("indices = [%d, %d, %d], want [0, 1, 2]",
+		calls[0].Index, calls[1].Index, calls[2].Index)
+}
+if m.Calls().Send().At(-1).Index != 2 {
+	t.Fatalf("At(-1).Index = %d, want 2", m.Calls().Send().At(-1).Index)
+}
+`, Options{})
+	})
+
+	It("Index resets to 0 after Reset()", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) error
+}`, `
+m := &ServiceMock{}
+m.Send("a")
+m.Send("b")
+m.Calls().Send().Reset()
+m.Send("c")
+
+if got := m.Calls().Send().At(0).Index; got != 0 {
+	t.Fatalf("after Reset, first call's Index = %d, want 0", got)
+}
+`, Options{})
+	})
+
+	It("WaitForCall predicate can use Index for ordering assertions", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) error
+}`, `
+m := &ServiceMock{}
+go func() {
+	for i := 0; i < 5; i++ {
+		m.Send("x")
+		timePkg.Sleep(2 * timePkg.Millisecond)
+	}
+}()
+err := m.Calls().Send().WaitForCall(
+	func(c ServiceMockSendCall) bool { return c.Index >= 4 },
+	200*timePkg.Millisecond,
+)
+if err != nil {
+	t.Fatalf("WaitForCall waiting for Index>=4: %v", err)
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
+	It("WaitForCall on empty log times out (predicate is never tested without a real call)", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(x int) error
+}`, `
+m := &ServiceMock{}
+// Predicate returns true for "any call" — but log is empty, so it never
+// gets called. WaitForCall must time out, not return nil.
+err := m.Calls().Send().WaitForCall(
+	func(c ServiceMockSendCall) bool { return true },
+	30*timePkg.Millisecond,
+)
+if err == nil {
+	t.Fatal("expected timeout error when log is empty")
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
+	It("WaitForCount(0, ...) returns immediately even with no calls", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(x int) error
+}`, `
+m := &ServiceMock{}
+if err := m.Calls().Send().WaitForCount(0, 50*timePkg.Millisecond); err != nil {
+	t.Fatalf("WaitForCount(0): %v", err)
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
+	It("WaitForCall works on a no-param method (predicate's Call has empty Param)", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Tick() error
+}`, `
+m := &ServiceMock{}
+m.On().Tick().Returns(nil)
+go func() {
+	timePkg.Sleep(5 * timePkg.Millisecond)
+	m.Tick()
+}()
+err := m.Calls().Tick().WaitForCall(
+	func(c ServiceMockTickCall) bool { return c.Return.Error == nil },
+	200*timePkg.Millisecond,
+)
+if err != nil { t.Fatalf("WaitForCall: %v", err) }
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
+	// --- async: --thread-safe-equivalent guarantees ---
 
 	It("--thread-safe: parallel calls record all entries without dropping any", func() {
 		runMockBehavior(`package svc
@@ -569,7 +819,7 @@ wg.Wait()
 if got := m.Calls().Send().Count(); got != N {
 	t.Fatalf("Count() = %d, want %d", got, N)
 }
-`, Options{MakeThreadSafe: true}, `import syncPkg "sync"`)
+`, Options{Async: true}, `import syncPkg "sync"`)
 	})
 })
 
