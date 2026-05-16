@@ -6,87 +6,209 @@
 {{end}}{{range .Imports.NonStdImports}}	{{.}}
 {{end}})
 
-{{end}}{{range $iface := .Interfaces}}{{range $method := $iface.Methods}}type {{$method.CallStructName}} struct {
-{{range $method.CallStructFields}}	{{.Name}} {{.Type}}
+{{end}}{{range $iface := .Interfaces}}{{/* ============================================
+   Per-method record + sub-struct + config-struct types.
+   Emitted at file scope so they're public consumption types.
+   =========================================================== */}}
+{{range $method := $iface.Methods}}// {{$method.CallType}} records one call to {{$iface.Name}}.{{$method.Name}}.
+type {{$method.CallType}} struct {
+	Param  {{$method.ParamType}}
+	Return {{$method.ReturnType}}
+}
+
+type {{$method.ParamType}} struct {
+{{range $method.ParamFields}}	{{.Name}} {{.Type}}
 {{end}}}
 
-{{end}}type {{$iface.MockName}} struct {
+type {{$method.ReturnType}} struct {
+{{range $method.ReturnFields}}	{{.Name}} {{.Type}}
+{{end}}}
+
+type {{$method.CfgType}} struct {
+{{range $method.CfgReturnFields}}	{{.Name}} {{.Type}}
+{{end}}{{if $method.HandlerFieldName}}	{{$method.HandlerFieldName}} {{$method.HandlerType}}
+{{end}}}
+
+{{end}}{{/* ===== Mock struct ===== */}}
+type {{$iface.MockName}} struct {
 {{- if $.Options.MakeThreadSafe}}
 	mu sync.Mutex
 {{end}}{{range $method := $iface.Methods}}
-	{{$method.CallsLogField}} []{{$method.CallStructName}}
-{{if $method.ReturnHandler}}	{{$method.ReturnHandler.FieldName}} func({{$method.ReturnHandler.ParamTypes}}) ({{$method.ReturnHandler.ReturnTypes}})
-{{end}}{{range $method.Returns}}	{{.Name}} {{.Type}}
-{{end}}{{end}}}
+	{{$method.LogField}} []{{$method.CallType}}
+	{{$method.CfgField}} {{$method.CfgType}}
+{{end}}}
 
+{{/* ===== Interface methods ===== */}}
 {{range $method := $iface.Methods}}func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
-{{- if and $.Options.MakeThreadSafe $method.Returns}}
+{{- if $method.ReturnFields}}
+{{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
-	this.{{$method.CallsLogField}} = append(this.{{$method.CallsLogField}}, {{$method.CallStructName}}{ {{- range $i, $f := $method.CallStructFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
-{{if $method.ReturnHandler}}	__mockHandler := this.{{$method.ReturnHandler.FieldName}}
-{{end}}{{range $i, $rf := $method.Signature.ReturnFields}}	__mockR{{$i}} := {{$rf}}
-{{end}}	this.mu.Unlock()
+{{end}}	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
+		Param: {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
+	})
+	__mockCallIdx := len(this.{{$method.LogField}}) - 1
+	__mockHandler := this.{{$method.CfgField}}.{{$method.HandlerFieldName}}
+{{range $i, $rf := $method.CfgReturnFields}}	__mockR{{$i}} := this.{{$method.CfgField}}.{{$rf.Name}}
+{{end}}{{- if $.Options.MakeThreadSafe}}	this.mu.Unlock()
 
-{{if $method.ReturnHandler}}	if __mockHandler != nil {
-		return __mockHandler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
+{{end}}{{range $i, $rf := $method.ReturnFields}}	var __mockRet{{$i}} {{$rf.Type}}
+{{end}}	if __mockHandler != nil {
+		{{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}} = __mockHandler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
+	} else {
+		{{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}} = {{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockR{{$i}}{{end}}
 	}
-{{end}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}__mockR{{$i}}{{end}}
+
+{{if $.Options.MakeThreadSafe}}	this.mu.Lock()
+{{end}}	this.{{$method.LogField}}[__mockCallIdx].Return = {{$method.ReturnType}}{ {{- range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}{{$rf.Name}}: __mockRet{{$i}}{{end}} }
+{{- if $.Options.MakeThreadSafe}}
+	this.mu.Unlock()
+{{end}}
+	return {{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}}
 {{else}}
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-{{end}}	this.{{$method.CallsLogField}} = append(this.{{$method.CallsLogField}}, {{$method.CallStructName}}{ {{- range $i, $f := $method.CallStructFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
-{{if $method.ReturnHandler}}	if this.{{$method.ReturnHandler.FieldName}} != nil {
-		return this.{{$method.ReturnHandler.FieldName}}({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
-	}
-{{end}}{{if $method.Returns}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}{{$rf}}{{end}}
-{{end}}{{end}}}
+{{end}}	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
+		Param: {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
+	})
+{{end}}}
 
-func (this *{{$iface.MockName}}) {{$method.Getters.CallsGetter.MethodName}}() {{$method.Getters.CallsGetter.ReturnType}} {
+{{end}}{{/* ===== Reset (mock-level) ===== */}}
+func (this *{{$iface.MockName}}) Reset() {
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-{{end}}	out := make({{$method.Getters.CallsGetter.ReturnType}}, len(this.{{$method.Getters.CallsGetter.FieldName}}))
-	copy(out, this.{{$method.Getters.CallsGetter.FieldName}})
+{{end}}{{range $method := $iface.Methods}}	this.{{$method.LogField}} = nil
+	this.{{$method.CfgField}} = {{$method.CfgType}}{}
+{{end}}}
+
+{{/* ===== Inspection namespace ===== */}}
+type {{$iface.InspectType}} struct{ m *{{$iface.MockName}} }
+
+// {{$iface.InspectEntryName}} returns the inspection namespace — one method per
+// interface method, each returning per-call records of {{$iface.Name}}.
+func (this *{{$iface.MockName}}) {{$iface.InspectEntryName}}() {{$iface.InspectType}} {
+	return {{$iface.InspectType}}{m: this}
+}
+
+// Reset clears every per-method call log on the mock without touching
+// configured returns or installed handlers.
+func (this {{$iface.InspectType}}) Reset() {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}{{range $method := $iface.Methods}}	this.m.{{$method.LogField}} = nil
+{{end}}}
+
+{{range $method := $iface.Methods}}func (this {{$iface.InspectType}}) {{$method.Name}}() {{$method.InspectMethodType}} {
+	return {{$method.InspectMethodType}}{m: this.m}
+}
+
+{{end}}{{/* ===== Per-method inspection types ===== */}}
+{{range $method := $iface.Methods}}type {{$method.InspectMethodType}} struct{ m *{{$iface.MockName}} }
+
+// Count returns the number of recorded calls to {{$iface.Name}}.{{$method.Name}}.
+func (this {{$method.InspectMethodType}}) Count() int {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	return len(this.m.{{$method.LogField}})
+}
+
+// At returns the i-th recorded call. Negative i counts from the end.
+// Panics on out-of-range with a message that surfaces both the input
+// and the log length.
+func (this {{$method.InspectMethodType}}) At(i int) {{$method.CallType}} {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	return this.m.{{$method.LogField}}[this.m.callIndex(len(this.m.{{$method.LogField}}), i)]
+}
+
+// Last is sugar for At(-1).
+func (this {{$method.InspectMethodType}}) Last() {{$method.CallType}} {
+	return this.At(-1)
+}
+
+// All returns a defensive copy of the full call log.
+func (this {{$method.InspectMethodType}}) All() []{{$method.CallType}} {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	out := make([]{{$method.CallType}}, len(this.m.{{$method.LogField}}))
+	copy(out, this.m.{{$method.LogField}})
 	return out
 }
 
-func (this *{{$iface.MockName}}) {{$method.Getters.CallByIndex.MethodName}}(i int) {{$method.Getters.CallByIndex.ReturnType}} {
+// Reset clears the call log for {{$method.Name}}.
+func (this {{$method.InspectMethodType}}) Reset() {
 {{- if $.Options.MakeThreadSafe}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	return this.{{$method.Getters.CallByIndex.FieldName}}[this.callIndex(len(this.{{$method.Getters.CallByIndex.FieldName}}), i)]
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	this.m.{{$method.LogField}} = nil
 }
 
-func (this *{{$iface.MockName}}) {{$method.Getters.CallCount.MethodName}}() int {
-{{- if $.Options.MakeThreadSafe}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	return len(this.{{$method.Getters.CallCount.FieldName}})
+{{end}}{{/* ===== Configuration namespace ===== */}}
+type {{$iface.ConfigType}} struct{ m *{{$iface.MockName}} }
+
+// {{$iface.ConfigEntryName}} returns the configuration namespace — one method per
+// interface method, each returning the per-method config object.
+func (this *{{$iface.MockName}}) {{$iface.ConfigEntryName}}() {{$iface.ConfigType}} {
+	return {{$iface.ConfigType}}{m: this}
 }
 
-{{if $method.Getters.HandlerSetter}}func (this *{{$iface.MockName}}) {{$method.Getters.HandlerSetter.MethodName}}(value {{$method.Getters.HandlerSetter.ParamType}}) {
+// Reset clears configured returns and installed handlers for every method
+// on the mock, without touching the call log.
+func (this {{$iface.ConfigType}}) Reset() {
 {{- if $.Options.MakeThreadSafe}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	this.{{$method.Getters.HandlerSetter.FieldName}} = value
-}
-
-{{end}}{{range $method.Getters.ReturnSetters}}func (this *{{$iface.MockName}}) {{.MethodName}}(value {{.ParamType}}) {
-{{- if $.Options.MakeThreadSafe}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	this.{{.FieldName}} = value
-}
-
-{{end}}{{end}}func (this *{{$iface.MockName}}) Reset_history() {
-{{- if $.Options.MakeThreadSafe}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}{{range $method := $iface.Methods}}	this.{{$method.CallsLogField}} = nil
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}{{range $method := $iface.Methods}}	this.m.{{$method.CfgField}} = {{$method.CfgType}}{}
 {{end}}}
 
-// callIndex resolves the index argument of a Method_call(i) indexer:
+{{range $method := $iface.Methods}}func (this {{$iface.ConfigType}}) {{$method.Name}}() {{$method.ConfigMethodType}} {
+	return {{$method.ConfigMethodType}}{m: this.m}
+}
+
+{{end}}{{/* ===== Per-method configuration types ===== */}}
+{{range $method := $iface.Methods}}type {{$method.ConfigMethodType}} struct{ m *{{$iface.MockName}} }
+
+{{if $method.ReturnFields}}// Returns sets all static return values for {{$method.Name}}.
+// Used when no Handler is installed.
+func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $i, $rf := $method.CfgReturnFields}}{{if $i}}, {{end}}{{$rf.Name}} {{$rf.Type}}{{end}}) {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}{{range $method.CfgReturnFields}}	this.m.{{$method.CfgField}}.{{.Name}} = {{.Name}}
+{{end}}}
+
+{{range $method.IndividualReturnSetters}}// {{.MethodName}} overrides just the {{.FieldName}} return value.
+func (this {{$method.ConfigMethodType}}) {{.MethodName}}(value {{.ParamType}}) {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	this.m.{{$method.CfgField}}.{{.FieldName}} = value
+}
+
+{{end}}// Handler installs a dynamic function called instead of returning the
+// configured static values.
+func (this {{$method.ConfigMethodType}}) Handler(value {{$method.HandlerType}}) {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	this.m.{{$method.CfgField}}.{{$method.HandlerFieldName}} = value
+}
+
+{{end}}// Reset clears configured returns and installed handler for {{$method.Name}}.
+func (this {{$method.ConfigMethodType}}) Reset() {
+{{- if $.Options.MakeThreadSafe}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	this.m.{{$method.CfgField}} = {{$method.CfgType}}{}
+}
+
+{{end}}{{/* ===== callIndex helper (per mock) ===== */}}
+// callIndex resolves the index argument of Method_call(i)-style indexers:
 // negative i counts from the end; out-of-range i panics with a message
 // that surfaces both the original input and the log length.
 func (this *{{$iface.MockName}}) callIndex(length, i int) int {

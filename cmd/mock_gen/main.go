@@ -85,9 +85,10 @@ func listSourceFiles(dir string) ([]string, error) {
 func main() {
 	var outputFile string
 	var templateFile string
-	var generateReturnHandler bool
 	var threadSafe bool
 	var noHeaderNote bool
+	var inspectEntry string
+	var configEntry string
 
 	var rootCmd = &cobra.Command{
 		Use:   "mock_gen [flags] <source_file.go | dir>",
@@ -103,7 +104,8 @@ mocks are placed in a "test" subdirectory by default.
 Examples:
   mock_gen service.go
   mock_gen --output mocks/service_mock.go service.go
-  mock_gen --generate-return-handler --thread-safe service.go
+  mock_gen --thread-safe service.go
+  mock_gen --inspect-entry Inspect --config-entry Configure service.go
   mock_gen ./internal/service`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
@@ -120,10 +122,11 @@ Examples:
 			}
 
 			opts := mock_gen.Options{
-				GenerateReturnHandler: generateReturnHandler,
-				MakeThreadSafe:        threadSafe,
-				AddHeaderNote:         !noHeaderNote,
-				CustomTemplate:        customTemplate,
+				MakeThreadSafe: threadSafe,
+				AddHeaderNote:  !noHeaderNote,
+				CustomTemplate: customTemplate,
+				InspectEntry:   inspectEntry,
+				ConfigEntry:    configEntry,
 			}
 
 			info, err := os.Stat(inputPath)
@@ -152,10 +155,14 @@ Examples:
 			"(imports, interface names, methods, params, returns, signatures). "+
 			"Output is run through gofmt, so it must produce valid Go. "+
 			"Use mock_gen.DefaultTemplate() programmatically to get the built-in template as a starting point.")
-	rootCmd.Flags().BoolVar(&generateReturnHandler, "generate-return-handler", false,
-		"If set, generates a single return handler field (e.g., Method_return func(...)), and ignores other return value fields. If the handler is provided, other return values (like Method_return_error) will be ignored.")
 	rootCmd.Flags().BoolVar(&threadSafe, "thread-safe", false,
 		"If set, adds a mutex to the mock struct and uses it to make all methods thread-safe")
+	rootCmd.Flags().StringVar(&inspectEntry, "inspect-entry", "",
+		"Override the inspection namespace entry method name (default: Calls). "+
+			"Use this when the source interface has a method named Calls.")
+	rootCmd.Flags().StringVar(&configEntry, "config-entry", "",
+		"Override the configuration namespace entry method name (default: On). "+
+			"Use this when the source interface has a method named On.")
 	rootCmd.Flags().BoolVar(&noHeaderNote, "no-header-note", false,
 		"If set, skips adding the 'Code generated' header comment to the generated file")
 

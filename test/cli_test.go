@@ -308,7 +308,7 @@ type Provider interface {
 				result, err := GenerateMockFileWithOptions(providerFile, Options{})
 				Expect(err).NotTo(HaveOccurred(), "run %d failed", i)
 				Expect(result).To(ContainSubstring("ProviderMock"), "run %d: mock struct missing", i)
-				Expect(result).To(ContainSubstring("Delete_calls"), "run %d: Delete method missing", i)
+				Expect(result).To(ContainSubstring("func (this *ProviderMock) Delete("), "run %d: Delete method missing", i)
 				Expect(os.WriteFile(outputFile, []byte(result), 0644)).To(Succeed())
 			}
 		})
