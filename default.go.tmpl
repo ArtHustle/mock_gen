@@ -164,17 +164,17 @@ func (this {{$method.InspectMethodType}}) Reset() {
 {{if $.Options.Async}}// WaitForCount blocks until at least n calls to {{$method.Name}} have been
 // recorded, or until timeout elapses. Returns nil on success, an error
 // describing the current count on timeout. Polls every 1ms.
+//
+// Implemented in terms of WaitForCall with an Index-based predicate; the
+// timeout error is rebuilt so it surfaces n and the current count.
 func (this {{$method.InspectMethodType}}) WaitForCount(n int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if this.Count() >= n {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
-		}
-		time.Sleep(time.Millisecond)
+	if n <= 0 {
+		return nil
 	}
+	if err := this.WaitForCall(func(c {{$method.CallType}}) bool { return c.Index >= n-1 }, timeout); err != nil {
+		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
+	}
+	return nil
 }
 
 // WaitForCall blocks until at least one recorded call to {{$method.Name}}
@@ -184,10 +184,8 @@ func (this {{$method.InspectMethodType}}) WaitForCount(n int, timeout time.Durat
 func (this {{$method.InspectMethodType}}) WaitForCall(predicate func({{$method.CallType}}) bool, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		for _, c := range this.All() {
-			if predicate(c) {
-				return nil
-			}
+		if slices.ContainsFunc(this.All(), predicate) {
+			return nil
 		}
 		if time.Now().After(deadline) {
 			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")

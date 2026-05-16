@@ -173,6 +173,7 @@ type Service interface {
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -314,17 +315,17 @@ func (this serviceMockSendCalls) Reset() {
 // WaitForCount blocks until at least n calls to Send have been
 // recorded, or until timeout elapses. Returns nil on success, an error
 // describing the current count on timeout. Polls every 1ms.
+//
+// Implemented in terms of WaitForCall with an Index-based predicate; the
+// timeout error is rebuilt so it surfaces n and the current count.
 func (this serviceMockSendCalls) WaitForCount(n int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if this.Count() >= n {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
-		}
-		time.Sleep(time.Millisecond)
+	if n <= 0 {
+		return nil
 	}
+	if err := this.WaitForCall(func(c ServiceMockSendCall) bool { return c.Index >= n-1 }, timeout); err != nil {
+		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
+	}
+	return nil
 }
 
 // WaitForCall blocks until at least one recorded call to Send
@@ -334,10 +335,8 @@ func (this serviceMockSendCalls) WaitForCount(n int, timeout time.Duration) erro
 func (this serviceMockSendCalls) WaitForCall(predicate func(ServiceMockSendCall) bool, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		for _, c := range this.All() {
-			if predicate(c) {
-				return nil
-			}
+		if slices.ContainsFunc(this.All(), predicate) {
+			return nil
 		}
 		if time.Now().After(deadline) {
 			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")

@@ -700,10 +700,12 @@ func (this *generator) collectImportsData(importPackages []*types.Package, hasIn
 	if this.options.Async {
 		stdImports = append(stdImports, strconv.Quote("sync"))
 		// WaitForCount / WaitForCall (emitted only under --async by the
-		// default template) use time.Now / time.Sleep / errors.New.
+		// default template) use time.Now / time.Sleep / errors.New, and
+		// WaitForCall uses slices.ContainsFunc.
 		// Custom templates manage their own imports.
 		if this.options.CustomTemplate == "" {
 			stdImports = append(stdImports, strconv.Quote("errors"))
+			stdImports = append(stdImports, strconv.Quote("slices"))
 			stdImports = append(stdImports, strconv.Quote("time"))
 		}
 	}
