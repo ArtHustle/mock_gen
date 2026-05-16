@@ -129,6 +129,22 @@ Examples:
 				ConfigEntry:    configEntry,
 			}
 
+			// Recursive: path ends in /... — walk the tree, generating
+			// per-source mocks in every package directory that contains
+			// at least one interface.
+			if strings.HasSuffix(inputPath, "/...") || inputPath == "..." {
+				root := strings.TrimSuffix(inputPath, "/...")
+				if root == "" || root == "..." {
+					root = "."
+				}
+				if outputFile != "" {
+					fmt.Println("--output is not supported with recursive input (multiple outputs)")
+					os.Exit(1)
+				}
+				generateRecursive(root, opts)
+				return
+			}
+
 			info, err := os.Stat(inputPath)
 			if err != nil {
 				fmt.Println("Failed to stat input:", err)
@@ -186,6 +202,17 @@ func generateSingleFile(inputFilePath, outputFile string, opts mock_gen.Options)
 }
 
 func generateDir(dir string, opts mock_gen.Options) {
+	written := generateDirCount(dir, opts)
+	if written == 0 {
+		fmt.Printf("No interfaces found in %s\n", dir)
+		os.Exit(1)
+	}
+}
+
+// generateDirCount processes one directory and returns the number of mock
+// files written. Used as a building block for generateDir (single dir) and
+// generateRecursive (walk the tree). It does not exit on empty input.
+func generateDirCount(dir string, opts mock_gen.Options) int {
 	files, err := listSourceFiles(dir)
 	if err != nil {
 		fmt.Println("Failed to list source files:", err)
@@ -205,9 +232,40 @@ func generateDir(dir string, opts mock_gen.Options) {
 		storeToFile(determineOutputFile(f), content)
 		written++
 	}
+	return written
+}
 
-	if written == 0 {
-		fmt.Printf("No interfaces found in %s\n", dir)
+// generateRecursive walks rootDir, invoking generateDirCount on every
+// subdirectory that contains non-test .go files. Skips "test" directories
+// (they hold our own output and should not be re-input).
+func generateRecursive(rootDir string, opts mock_gen.Options) {
+	total := 0
+	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		// Skip our own output directories — they're generated mocks, not
+		// inputs. Re-feeding them would create mocks-of-mocks.
+		if d.Name() == "test" && path != rootDir {
+			return filepath.SkipDir
+		}
+		// Skip hidden dirs (.git, .idea, ...) and vendor.
+		name := d.Name()
+		if path != rootDir && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
+			return filepath.SkipDir
+		}
+		total += generateDirCount(path, opts)
+		return nil
+	})
+	if err != nil {
+		fmt.Println("Failed to walk:", err)
+		os.Exit(1)
+	}
+	if total == 0 {
+		fmt.Printf("No interfaces found under %s\n", rootDir)
 		os.Exit(1)
 	}
 }

@@ -211,6 +211,34 @@ type MethodData struct {
 
 See `DefaultTemplate()` for the built-in template — copy it and modify to customize.
 
+## `go generate` integration
+
+Add a `//go:generate` directive at the top of each source file containing interfaces you want to mock:
+
+```go
+//go:generate mock_gen --thread-safe $GOFILE
+
+package service
+
+type Service interface {
+    Send(ctx context.Context, email string) error
+}
+```
+
+Then regenerate from the project root:
+
+```shell
+go generate ./...
+```
+
+For a whole-tree regeneration without per-file directives, the CLI's recursive mode works directly:
+
+```shell
+mock_gen --thread-safe ./...
+```
+
+This walks the current directory recursively, generates one mock per source file that declares at least one interface, and writes each into a sibling `test/` directory. Directories named `test`, `vendor`, `node_modules`, or beginning with `.` are skipped (they don't get re-fed as input). Generated files are byte-compared before writing — unchanged files are not rewritten, preserving mtime for build caches.
+
 ## Programmatic usage
 
 ```go

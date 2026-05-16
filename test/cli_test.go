@@ -257,6 +257,126 @@ type Config struct{}
 		})
 	})
 
+	// Recursive `./...` mode: scan a directory tree, generating one mock per
+	// source file with at least one interface, per package directory. (#3)
+	Context("when the input ends in /...", func() {
+		var rootDir string
+
+		BeforeEach(func() {
+			var err error
+			rootDir, err = os.MkdirTemp(os.TempDir(), "mock_gen_recursive_test_")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { os.RemoveAll(rootDir) })
+
+			Expect(os.WriteFile(
+				filepath.Join(rootDir, "go.mod"),
+				[]byte("module recursive_test\n\ngo 1.23\n"),
+				0644,
+			)).To(Succeed())
+
+			// Package "a" at rootDir/a/a.go with an interface.
+			Expect(os.MkdirAll(filepath.Join(rootDir, "a"), 0755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(rootDir, "a", "a.go"), []byte(`package a
+
+type A interface {
+	DoA()
+}
+`), 0644)).To(Succeed())
+
+			// Package "b/c" nested deeper, also with an interface.
+			Expect(os.MkdirAll(filepath.Join(rootDir, "b", "c"), 0755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(rootDir, "b", "c", "c.go"), []byte(`package c
+
+type C interface {
+	DoC()
+}
+`), 0644)).To(Succeed())
+
+			// Package "d" with no interfaces — should be skipped silently.
+			Expect(os.MkdirAll(filepath.Join(rootDir, "d"), 0755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(rootDir, "d", "d.go"), []byte(`package d
+
+type Config struct{ X int }
+`), 0644)).To(Succeed())
+
+			// Pre-existing "test" output directory — the recursive walk
+			// should skip directories named "test" to avoid regenerating
+			// our own output.
+			Expect(os.MkdirAll(filepath.Join(rootDir, "a", "test"), 0755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(rootDir, "a", "test", "noise.go"), []byte(`package test
+
+type Noise interface { ShouldBeIgnored() }
+`), 0644)).To(Succeed())
+		})
+
+		It("walks every package directory and generates per-source-file mocks", func() {
+			command := exec.Command(mockGeneratorPath, filepath.Join(rootDir, "..."))
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(0))
+
+			Expect(filepath.Join(rootDir, "a", "test", "a_mock.go")).To(BeAnExistingFile())
+			Expect(filepath.Join(rootDir, "b", "c", "test", "c_mock.go")).To(BeAnExistingFile())
+
+			// "d" has no interfaces — no mock dir created.
+			Expect(filepath.Join(rootDir, "d", "test")).NotTo(BeADirectory())
+
+			// "test" subdir should NOT have been walked into to regenerate
+			// our own outputs as inputs.
+			Expect(filepath.Join(rootDir, "a", "test", "test", "noise_mock.go")).NotTo(BeAnExistingFile())
+		})
+
+		It("rejects --output with recursive input (multiple outputs)", func() {
+			command := exec.Command(mockGeneratorPath, "--output", "/tmp/x.go", filepath.Join(rootDir, "..."))
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(1))
+		})
+
+		It("skips hidden, vendor, and node_modules directories", func() {
+			// Add a vendor dir with an interface that should NOT produce a mock.
+			Expect(os.MkdirAll(filepath.Join(rootDir, "vendor", "pkg"), 0755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(rootDir, "vendor", "pkg", "v.go"), []byte(`package pkg
+type V interface { ShouldBeSkipped() }
+`), 0644)).To(Succeed())
+
+			// And a .hidden dir.
+			Expect(os.MkdirAll(filepath.Join(rootDir, ".hidden"), 0755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(rootDir, ".hidden", "h.go"), []byte(`package hidden
+type H interface { AlsoSkipped() }
+`), 0644)).To(Succeed())
+
+			command := exec.Command(mockGeneratorPath, filepath.Join(rootDir, "..."))
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(0))
+
+			Expect(filepath.Join(rootDir, "vendor", "pkg", "test", "v_mock.go")).NotTo(BeAnExistingFile())
+			Expect(filepath.Join(rootDir, ".hidden", "test", "h_mock.go")).NotTo(BeAnExistingFile())
+		})
+
+		It("exits with code 1 when the recursive walk finds no interfaces anywhere", func() {
+			emptyRoot, err := os.MkdirTemp(os.TempDir(), "mock_gen_recursive_empty_")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { os.RemoveAll(emptyRoot) })
+
+			Expect(os.WriteFile(
+				filepath.Join(emptyRoot, "go.mod"),
+				[]byte("module empty_recursive\n\ngo 1.23\n"),
+				0644,
+			)).To(Succeed())
+			Expect(os.MkdirAll(filepath.Join(emptyRoot, "x"), 0755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(emptyRoot, "x", "x.go"), []byte(`package x
+type Config struct{}
+`), 0644)).To(Succeed())
+
+			command := exec.Command(mockGeneratorPath, filepath.Join(emptyRoot, "..."))
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(1))
+		})
+	})
+
 	// Regression test: when a package has a struct field with the same name as
 	// an interface, findTypeDef must return the TypeName (interface declaration),
 	// not the struct field. Previously this was non-deterministic due to map
