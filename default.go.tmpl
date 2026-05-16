@@ -38,6 +38,13 @@ type {{$iface.MockName}} struct {
 	{{$method.CfgField}} {{$method.CfgType}}
 {{end}}}
 
+// New{{$iface.MockName}} returns a zero-valued {{$iface.MockName}}. Equivalent
+// to &{{$iface.MockName}}{}; provided as a consistent entry point that may
+// initialize internal state in future versions.
+func New{{$iface.MockName}}() *{{$iface.MockName}} {
+	return &{{$iface.MockName}}{}
+}
+
 {{/* ===== Interface methods ===== */}}
 {{range $method := $iface.Methods}}func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
 {{- if $method.ReturnFields}}

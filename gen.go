@@ -173,6 +173,19 @@ func toTitle(s string) string {
 	return string(unicode.ToTitle(r)) + s[size:]
 }
 
+// unexportedTypeName lowercases the first rune of name. Used for the
+// inspect/config namespace types (e.g. `serviceMockCalls`,
+// `serviceMockSendOn`) which are unexported because users only reach them
+// via method chains (mock.Calls().Send().Count() etc.) and never need to
+// name them at a call site.
+func unexportedTypeName(name string) string {
+	if name == "" {
+		return ""
+	}
+	r, size := utf8.DecodeRuneInString(name)
+	return string(unicode.ToLower(r)) + name[size:]
+}
+
 // exportedFieldName produces a Go-exported (capitalized) field name from a
 // source identifier. Leading underscores are stripped first — they're a
 // Go convention for "intentionally unused", which doesn't translate to the
@@ -771,8 +784,8 @@ func (this *generator) collectInterfaceData(name string, iface *types.Interface)
 		MockName:         mockName,
 		InspectEntryName: inspectEntry,
 		ConfigEntryName:  configEntry,
-		InspectType:      mockName + inspectEntry,
-		ConfigType:       mockName + configEntry,
+		InspectType:      unexportedTypeName(mockName + inspectEntry),
+		ConfigType:       unexportedTypeName(mockName + configEntry),
 		Methods:          []MethodData{},
 	}
 
@@ -797,6 +810,9 @@ func (this *generator) collectInterfaceData(name string, iface *types.Interface)
 // Options.InspectEntry or Options.ConfigEntry (CLI: --inspect-entry,
 // --config-entry).
 func validateNoEntryCollisions(interfaceName string, methods []MethodData, inspectEntry, configEntry string) error {
+	// Reserved mock-level method names. Constructor (New<MockName>) lives at
+	// package scope, not method scope, so it can't collide with interface
+	// methods — no check needed for it.
 	for _, m := range methods {
 		switch m.Name {
 		case inspectEntry:
@@ -835,8 +851,8 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 		LogField:          methodLower + "Log",
 		CfgField:          methodLower + "Cfg",
 		CfgType:           strings.ToLower(mockName[0:1]) + mockName[1:] + method.Name() + "Cfg",
-		InspectMethodType: mockName + method.Name() + "Calls",
-		ConfigMethodType:  mockName + method.Name() + "On",
+		InspectMethodType: unexportedTypeName(mockName + method.Name() + "Calls"),
+		ConfigMethodType:  unexportedTypeName(mockName + method.Name() + "On"),
 		ParamFields:       []FieldData{},
 		ReturnFields:      []FieldData{},
 		CfgReturnFields:   []FieldData{},

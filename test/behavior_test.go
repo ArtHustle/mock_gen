@@ -354,7 +354,8 @@ type Service interface {
 	Calls()
 	DoThing()
 }`, `
-m := &ServiceMock{}
+// Constructor name is always New<MockName>, independent of entry overrides.
+m := NewServiceMock()
 m.DoThing()
 m.Calls()
 
@@ -383,6 +384,63 @@ if m.Calls().On().Count() != 1 {
 	t.Fatal("Calls().On() should reflect the source method named On")
 }
 `, Options{ConfigEntry: "Configure"})
+	})
+
+	// --- constructor + unexported namespace types ---
+
+	It("New<Mock>() returns a usable pointer to the mock", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Greet(name string) string
+}`, `
+m := NewServiceMock()
+m.On().Greet().Returns("hi")
+if got := m.Greet("world"); got != "hi" {
+	t.Fatalf("Greet() = %q, want hi", got)
+}
+if m.Calls().Greet().Count() != 1 {
+	t.Fatal("expected 1 recorded call")
+}
+`, Options{})
+	})
+
+	It("multiple interfaces in same source each get their own New<Mock>() constructor", func() {
+		runMockBehavior(`package svc
+
+type A interface { DoA() error }
+type B interface { DoB() error }`, `
+a := NewAMock()
+b := NewBMock()
+a.DoA()
+b.DoB()
+if a.Calls().DoA().Count() != 1 || b.Calls().DoB().Count() != 1 {
+	t.Fatal("constructors should produce independent, usable mocks")
+}
+`, Options{})
+	})
+
+	It("namespace types are unexported but fully usable via method chains", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) error
+}`, `
+m := NewServiceMock()
+
+// Full chain works without ever naming an unexported type:
+m.On().Send().Returns(nil)
+m.Send("a")
+if m.Calls().Send().Count() != 1 {
+	t.Fatal("count")
+}
+
+// Sub-Returns of recorded calls are still public/usable:
+var calls []ServiceMockSendCall = m.Calls().Send().All()
+if len(calls) != 1 || calls[0].Param.Email != "a" {
+	t.Fatal("public Call sub-types should still be nameable")
+}
+`, Options{})
 	})
 
 	// --- safety: append-before-handler so panicking handlers don't lose the call ---

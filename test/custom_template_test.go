@@ -60,8 +60,8 @@ type Stub struct{}
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring("// Name: Service"))
 		Expect(out).To(ContainSubstring("// MockName: ServiceMock"))
-		Expect(out).To(ContainSubstring("// Inspect entry: Calls -> type ServiceMockCalls"))
-		Expect(out).To(ContainSubstring("// Config entry: On -> type ServiceMockOn"))
+		Expect(out).To(ContainSubstring("// Inspect entry: Calls -> type serviceMockCalls"))
+		Expect(out).To(ContainSubstring("// Config entry: On -> type serviceMockOn"))
 		Expect(out).To(ContainSubstring("// Methods: 1"))
 	})
 
@@ -83,8 +83,8 @@ type Stub struct{}
 			ConfigEntry:    "Configure",
 		})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("// inspect: Inspect type: ServiceMockInspect"))
-		Expect(out).To(ContainSubstring("// config: Configure type: ServiceMockConfigure"))
+		Expect(out).To(ContainSubstring("// inspect: Inspect type: serviceMockInspect"))
+		Expect(out).To(ContainSubstring("// config: Configure type: serviceMockConfigure"))
 	})
 
 	// --- access to MethodData ---
@@ -123,8 +123,8 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring("// CfgType: serviceMockSendCfg"))
 		Expect(out).To(ContainSubstring("// LogField: sendLog"))
 		Expect(out).To(ContainSubstring("// CfgField: sendCfg"))
-		Expect(out).To(ContainSubstring("// InspectMethodType: ServiceMockSendCalls"))
-		Expect(out).To(ContainSubstring("// ConfigMethodType: ServiceMockSendOn"))
+		Expect(out).To(ContainSubstring("// InspectMethodType: serviceMockSendCalls"))
+		Expect(out).To(ContainSubstring("// ConfigMethodType: serviceMockSendOn"))
 		Expect(out).To(ContainSubstring("// ParamFields: Email:string"))
 		Expect(out).To(ContainSubstring("// ReturnFields: Id:string Err:error"))
 		Expect(out).To(ContainSubstring("// CfgReturnFields: id:string err:error"))

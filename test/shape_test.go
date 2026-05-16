@@ -46,6 +46,13 @@ type ServiceMock struct {
 	processCfg serviceMockProcessCfg
 }
 
+// NewServiceMock returns a zero-valued ServiceMock. Equivalent
+// to &ServiceMock{}; provided as a consistent entry point that may
+// initialize internal state in future versions.
+func NewServiceMock() *ServiceMock {
+	return &ServiceMock{}
+}
+
 func (this *ServiceMock) Process() {
 	this.processLog = append(this.processLog, ServiceMockProcessCall{
 		Param: ServiceMockProcessParam{},
@@ -57,77 +64,77 @@ func (this *ServiceMock) Reset() {
 	this.processCfg = serviceMockProcessCfg{}
 }
 
-type ServiceMockCalls struct{ m *ServiceMock }
+type serviceMockCalls struct{ m *ServiceMock }
 
 // Calls returns the inspection namespace — one method per
 // interface method, each returning per-call records of Service.
-func (this *ServiceMock) Calls() ServiceMockCalls {
-	return ServiceMockCalls{m: this}
+func (this *ServiceMock) Calls() serviceMockCalls {
+	return serviceMockCalls{m: this}
 }
 
 // Reset clears every per-method call log on the mock without touching
 // configured returns or installed handlers.
-func (this ServiceMockCalls) Reset() {
+func (this serviceMockCalls) Reset() {
 	this.m.processLog = nil
 }
 
-func (this ServiceMockCalls) Process() ServiceMockProcessCalls {
-	return ServiceMockProcessCalls{m: this.m}
+func (this serviceMockCalls) Process() serviceMockProcessCalls {
+	return serviceMockProcessCalls{m: this.m}
 }
 
-type ServiceMockProcessCalls struct{ m *ServiceMock }
+type serviceMockProcessCalls struct{ m *ServiceMock }
 
 // Count returns the number of recorded calls to Service.Process.
-func (this ServiceMockProcessCalls) Count() int {
+func (this serviceMockProcessCalls) Count() int {
 	return len(this.m.processLog)
 }
 
 // At returns the i-th recorded call. Negative i counts from the end.
 // Panics on out-of-range with a message that surfaces both the input
 // and the log length.
-func (this ServiceMockProcessCalls) At(i int) ServiceMockProcessCall {
+func (this serviceMockProcessCalls) At(i int) ServiceMockProcessCall {
 	return this.m.processLog[this.m.callIndex(len(this.m.processLog), i)]
 }
 
 // Last is sugar for At(-1).
-func (this ServiceMockProcessCalls) Last() ServiceMockProcessCall {
+func (this serviceMockProcessCalls) Last() ServiceMockProcessCall {
 	return this.At(-1)
 }
 
 // All returns a defensive copy of the full call log.
-func (this ServiceMockProcessCalls) All() []ServiceMockProcessCall {
+func (this serviceMockProcessCalls) All() []ServiceMockProcessCall {
 	out := make([]ServiceMockProcessCall, len(this.m.processLog))
 	copy(out, this.m.processLog)
 	return out
 }
 
 // Reset clears the call log for Process.
-func (this ServiceMockProcessCalls) Reset() {
+func (this serviceMockProcessCalls) Reset() {
 	this.m.processLog = nil
 }
 
-type ServiceMockOn struct{ m *ServiceMock }
+type serviceMockOn struct{ m *ServiceMock }
 
 // On returns the configuration namespace — one method per
 // interface method, each returning the per-method config object.
-func (this *ServiceMock) On() ServiceMockOn {
-	return ServiceMockOn{m: this}
+func (this *ServiceMock) On() serviceMockOn {
+	return serviceMockOn{m: this}
 }
 
 // Reset clears configured returns and installed handlers for every method
 // on the mock, without touching the call log.
-func (this ServiceMockOn) Reset() {
+func (this serviceMockOn) Reset() {
 	this.m.processCfg = serviceMockProcessCfg{}
 }
 
-func (this ServiceMockOn) Process() ServiceMockProcessOn {
-	return ServiceMockProcessOn{m: this.m}
+func (this serviceMockOn) Process() serviceMockProcessOn {
+	return serviceMockProcessOn{m: this.m}
 }
 
-type ServiceMockProcessOn struct{ m *ServiceMock }
+type serviceMockProcessOn struct{ m *ServiceMock }
 
 // Reset clears configured returns and installed handler for Process.
-func (this ServiceMockProcessOn) Reset() {
+func (this serviceMockProcessOn) Reset() {
 	this.m.processCfg = serviceMockProcessCfg{}
 }
 
@@ -193,6 +200,13 @@ type ServiceMock struct {
 	sendCfg serviceMockSendCfg
 }
 
+// NewServiceMock returns a zero-valued ServiceMock. Equivalent
+// to &ServiceMock{}; provided as a consistent entry point that may
+// initialize internal state in future versions.
+func NewServiceMock() *ServiceMock {
+	return &ServiceMock{}
+}
+
 func (this *ServiceMock) Send(ctx context.Context, email string) (id string, err error) {
 	this.mu.Lock()
 	this.sendLog = append(this.sendLog, ServiceMockSendCall{
@@ -226,30 +240,30 @@ func (this *ServiceMock) Reset() {
 	this.sendCfg = serviceMockSendCfg{}
 }
 
-type ServiceMockCalls struct{ m *ServiceMock }
+type serviceMockCalls struct{ m *ServiceMock }
 
 // Calls returns the inspection namespace — one method per
 // interface method, each returning per-call records of Service.
-func (this *ServiceMock) Calls() ServiceMockCalls {
-	return ServiceMockCalls{m: this}
+func (this *ServiceMock) Calls() serviceMockCalls {
+	return serviceMockCalls{m: this}
 }
 
 // Reset clears every per-method call log on the mock without touching
 // configured returns or installed handlers.
-func (this ServiceMockCalls) Reset() {
+func (this serviceMockCalls) Reset() {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendLog = nil
 }
 
-func (this ServiceMockCalls) Send() ServiceMockSendCalls {
-	return ServiceMockSendCalls{m: this.m}
+func (this serviceMockCalls) Send() serviceMockSendCalls {
+	return serviceMockSendCalls{m: this.m}
 }
 
-type ServiceMockSendCalls struct{ m *ServiceMock }
+type serviceMockSendCalls struct{ m *ServiceMock }
 
 // Count returns the number of recorded calls to Service.Send.
-func (this ServiceMockSendCalls) Count() int {
+func (this serviceMockSendCalls) Count() int {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	return len(this.m.sendLog)
@@ -258,19 +272,19 @@ func (this ServiceMockSendCalls) Count() int {
 // At returns the i-th recorded call. Negative i counts from the end.
 // Panics on out-of-range with a message that surfaces both the input
 // and the log length.
-func (this ServiceMockSendCalls) At(i int) ServiceMockSendCall {
+func (this serviceMockSendCalls) At(i int) ServiceMockSendCall {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	return this.m.sendLog[this.m.callIndex(len(this.m.sendLog), i)]
 }
 
 // Last is sugar for At(-1).
-func (this ServiceMockSendCalls) Last() ServiceMockSendCall {
+func (this serviceMockSendCalls) Last() ServiceMockSendCall {
 	return this.At(-1)
 }
 
 // All returns a defensive copy of the full call log.
-func (this ServiceMockSendCalls) All() []ServiceMockSendCall {
+func (this serviceMockSendCalls) All() []ServiceMockSendCall {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	out := make([]ServiceMockSendCall, len(this.m.sendLog))
@@ -279,37 +293,37 @@ func (this ServiceMockSendCalls) All() []ServiceMockSendCall {
 }
 
 // Reset clears the call log for Send.
-func (this ServiceMockSendCalls) Reset() {
+func (this serviceMockSendCalls) Reset() {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendLog = nil
 }
 
-type ServiceMockOn struct{ m *ServiceMock }
+type serviceMockOn struct{ m *ServiceMock }
 
 // On returns the configuration namespace — one method per
 // interface method, each returning the per-method config object.
-func (this *ServiceMock) On() ServiceMockOn {
-	return ServiceMockOn{m: this}
+func (this *ServiceMock) On() serviceMockOn {
+	return serviceMockOn{m: this}
 }
 
 // Reset clears configured returns and installed handlers for every method
 // on the mock, without touching the call log.
-func (this ServiceMockOn) Reset() {
+func (this serviceMockOn) Reset() {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg = serviceMockSendCfg{}
 }
 
-func (this ServiceMockOn) Send() ServiceMockSendOn {
-	return ServiceMockSendOn{m: this.m}
+func (this serviceMockOn) Send() serviceMockSendOn {
+	return serviceMockSendOn{m: this.m}
 }
 
-type ServiceMockSendOn struct{ m *ServiceMock }
+type serviceMockSendOn struct{ m *ServiceMock }
 
 // Returns sets all static return values for Send.
 // Used when no Handler is installed.
-func (this ServiceMockSendOn) Returns(id string, err error) {
+func (this serviceMockSendOn) Returns(id string, err error) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg.id = id
@@ -317,14 +331,14 @@ func (this ServiceMockSendOn) Returns(id string, err error) {
 }
 
 // ReturnsId overrides just the id return value.
-func (this ServiceMockSendOn) ReturnsId(value string) {
+func (this serviceMockSendOn) ReturnsId(value string) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg.id = value
 }
 
 // ReturnsErr overrides just the err return value.
-func (this ServiceMockSendOn) ReturnsErr(value error) {
+func (this serviceMockSendOn) ReturnsErr(value error) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg.err = value
@@ -332,14 +346,14 @@ func (this ServiceMockSendOn) ReturnsErr(value error) {
 
 // Handler installs a dynamic function called instead of returning the
 // configured static values.
-func (this ServiceMockSendOn) Handler(value func(context.Context, string) (string, error)) {
+func (this serviceMockSendOn) Handler(value func(context.Context, string) (string, error)) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg.handler = value
 }
 
 // Reset clears configured returns and installed handler for Send.
-func (this ServiceMockSendOn) Reset() {
+func (this serviceMockSendOn) Reset() {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg = serviceMockSendCfg{}
@@ -396,6 +410,13 @@ type ServiceMock struct {
 	doSomethingCfg serviceMockDoSomethingCfg
 }
 
+// NewServiceMock returns a zero-valued ServiceMock. Equivalent
+// to &ServiceMock{}; provided as a consistent entry point that may
+// initialize internal state in future versions.
+func NewServiceMock() *ServiceMock {
+	return &ServiceMock{}
+}
+
 func (this *ServiceMock) DoSomething() {
 	this.doSomethingLog = append(this.doSomethingLog, ServiceMockDoSomethingCall{
 		Param: ServiceMockDoSomethingParam{},
@@ -407,77 +428,77 @@ func (this *ServiceMock) Reset() {
 	this.doSomethingCfg = serviceMockDoSomethingCfg{}
 }
 
-type ServiceMockCalls struct{ m *ServiceMock }
+type serviceMockCalls struct{ m *ServiceMock }
 
 // Calls returns the inspection namespace — one method per
 // interface method, each returning per-call records of Service.
-func (this *ServiceMock) Calls() ServiceMockCalls {
-	return ServiceMockCalls{m: this}
+func (this *ServiceMock) Calls() serviceMockCalls {
+	return serviceMockCalls{m: this}
 }
 
 // Reset clears every per-method call log on the mock without touching
 // configured returns or installed handlers.
-func (this ServiceMockCalls) Reset() {
+func (this serviceMockCalls) Reset() {
 	this.m.doSomethingLog = nil
 }
 
-func (this ServiceMockCalls) DoSomething() ServiceMockDoSomethingCalls {
-	return ServiceMockDoSomethingCalls{m: this.m}
+func (this serviceMockCalls) DoSomething() serviceMockDoSomethingCalls {
+	return serviceMockDoSomethingCalls{m: this.m}
 }
 
-type ServiceMockDoSomethingCalls struct{ m *ServiceMock }
+type serviceMockDoSomethingCalls struct{ m *ServiceMock }
 
 // Count returns the number of recorded calls to Service.DoSomething.
-func (this ServiceMockDoSomethingCalls) Count() int {
+func (this serviceMockDoSomethingCalls) Count() int {
 	return len(this.m.doSomethingLog)
 }
 
 // At returns the i-th recorded call. Negative i counts from the end.
 // Panics on out-of-range with a message that surfaces both the input
 // and the log length.
-func (this ServiceMockDoSomethingCalls) At(i int) ServiceMockDoSomethingCall {
+func (this serviceMockDoSomethingCalls) At(i int) ServiceMockDoSomethingCall {
 	return this.m.doSomethingLog[this.m.callIndex(len(this.m.doSomethingLog), i)]
 }
 
 // Last is sugar for At(-1).
-func (this ServiceMockDoSomethingCalls) Last() ServiceMockDoSomethingCall {
+func (this serviceMockDoSomethingCalls) Last() ServiceMockDoSomethingCall {
 	return this.At(-1)
 }
 
 // All returns a defensive copy of the full call log.
-func (this ServiceMockDoSomethingCalls) All() []ServiceMockDoSomethingCall {
+func (this serviceMockDoSomethingCalls) All() []ServiceMockDoSomethingCall {
 	out := make([]ServiceMockDoSomethingCall, len(this.m.doSomethingLog))
 	copy(out, this.m.doSomethingLog)
 	return out
 }
 
 // Reset clears the call log for DoSomething.
-func (this ServiceMockDoSomethingCalls) Reset() {
+func (this serviceMockDoSomethingCalls) Reset() {
 	this.m.doSomethingLog = nil
 }
 
-type ServiceMockOn struct{ m *ServiceMock }
+type serviceMockOn struct{ m *ServiceMock }
 
 // On returns the configuration namespace — one method per
 // interface method, each returning the per-method config object.
-func (this *ServiceMock) On() ServiceMockOn {
-	return ServiceMockOn{m: this}
+func (this *ServiceMock) On() serviceMockOn {
+	return serviceMockOn{m: this}
 }
 
 // Reset clears configured returns and installed handlers for every method
 // on the mock, without touching the call log.
-func (this ServiceMockOn) Reset() {
+func (this serviceMockOn) Reset() {
 	this.m.doSomethingCfg = serviceMockDoSomethingCfg{}
 }
 
-func (this ServiceMockOn) DoSomething() ServiceMockDoSomethingOn {
-	return ServiceMockDoSomethingOn{m: this.m}
+func (this serviceMockOn) DoSomething() serviceMockDoSomethingOn {
+	return serviceMockDoSomethingOn{m: this.m}
 }
 
-type ServiceMockDoSomethingOn struct{ m *ServiceMock }
+type serviceMockDoSomethingOn struct{ m *ServiceMock }
 
 // Reset clears configured returns and installed handler for DoSomething.
-func (this ServiceMockDoSomethingOn) Reset() {
+func (this serviceMockDoSomethingOn) Reset() {
 	this.m.doSomethingCfg = serviceMockDoSomethingCfg{}
 }
 

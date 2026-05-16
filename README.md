@@ -61,7 +61,7 @@ mock_gen --thread-safe service.go
 Produces a mock in `./test/service_mock.go` that you use like this:
 
 ```go
-mock := &test.ServiceMock{}
+mock := test.NewServiceMock()
 
 // Configure: arm static returns
 mock.On().GetProductByID().Returns(Product{ID: "abc"}, nil)
@@ -143,7 +143,7 @@ With `--thread-safe`, a `sync.Mutex` is added and all generated state is guarded
 The exported API surface is identical with or without `--thread-safe`; flipping it on only adds internal locking.
 
 ```go
-mock := &test.ServiceMock{}
+mock := test.NewServiceMock()
 mock.On().Send().Handler(/* ... */)
 
 // 100 goroutines calling Send concurrently is safe:
