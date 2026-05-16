@@ -64,10 +64,13 @@ Produces a mock in `./test/service_mock.go` that you use like this:
 mock := test.NewServiceMock()
 
 // Configure: arm static returns
-mock.On().GetProductByID().Returns(Product{ID: "abc"}, nil)
+mock.On().GetProductByID().ReturnAll(Product{ID: "abc"}, nil)
+
+// Override just one return value, keep others armed
+mock.On().GetProductByID().Return().Error(errors.New("not found"))
 
 // Or install a dynamic handler
-mock.On().GetProductByID().Handler(func(ctx context.Context, id string) (Product, error) {
+mock.On().GetProductByID().ReturnCustom(func(ctx context.Context, id string) (Product, error) {
     if id == "missing" {
         return Product{}, errors.New("not found")
     }
@@ -107,10 +110,10 @@ Each `Call` has `Param` and `Return` sub-fields containing the recorded args (in
 
 `mock.On()` returns a namespace where every interface method becomes an accessor. Each accessor returns a per-method config object with:
 
-- **`Returns(...)`** — set all static return values positionally.
-- **`ReturnsX(value)`** — override just the `X` return (where `X` is the title-cased return name). The rest keep their currently-armed values.
-- **`Handler(func(...))`** — install a dynamic function called instead of returning the static values.
-- **`Reset()`** — clears configured returns and the handler for this method.
+- **`ReturnAll(...)`** — set all static return values positionally.
+- **`Return().X(value)`** — override just the `X` return (where `X` is the title-cased return name). The rest keep their currently-armed values. Subsequent `ReturnAll(...)` overwrites every slot positionally.
+- **`ReturnCustom(func(...))`** — install a dynamic function called instead of returning the static values.
+- **`Reset()`** — clears `ReturnAll`-set values, `Return()`-set values, and the `ReturnCustom` handler for this method.
 
 `mock.On().Reset()` clears every method's config at once, without touching the call logs.
 
@@ -163,7 +166,7 @@ Both poll every 1ms. On timeout they return a descriptive `error` (not `panic`) 
 
 ```go
 mock := test.NewServiceMock()
-mock.On().Send().Handler(/* ... */)
+mock.On().Send().ReturnCustom(/* ... */)
 
 // 100 goroutines calling Send concurrently is safe:
 for i := 0; i < 100; i++ {
@@ -221,10 +224,12 @@ type MethodData struct {
     CfgReturnFields         []FieldData
     HandlerFieldName        string  // "handler" (empty when no returns)
     HandlerType             string  // "func(...) (...)"
-    InspectMethodType       string  // "ServiceMockSendCalls"
-    ConfigMethodType        string  // "ServiceMockSendOn"
-    ReturnsSetterName       string  // "Returns" (empty when no returns)
-    IndividualReturnSetters []SetterMethod
+    InspectMethodType       string  // "serviceMockSendCalls"
+    ConfigMethodType        string  // "serviceMockSendOn"
+    PerReturnSetterType     string  // "serviceMockSendReturn" (empty when no returns)
+    ReturnsSetterName       string  // "ReturnAll" (empty when no returns)
+    CustomReturnSetterName  string  // "ReturnCustom" (empty when no returns)
+    IndividualReturnSetters []SetterMethod  // MethodName is the bare return name, e.g. "Id"
 }
 ```
 
@@ -274,6 +279,18 @@ content, err := mock_gen.GenerateMockContentWithOptions(sourceCode, mock_gen.Opt
 
 ## Versioning
 
+v0.11.0 renamed the per-method config setters. Migration:
+
+| v0.10.x | v0.11.0 |
+|---|---|
+| `mock.On().Send().Returns(id, err)` | `mock.On().Send().ReturnAll(id, err)` |
+| `mock.On().Send().ReturnsId(id)` | `mock.On().Send().Return().Id(id)` |
+| `mock.On().Send().ReturnsErr(err)` | `mock.On().Send().Return().Err(err)` |
+| `mock.On().Send().Handler(fn)` | `mock.On().Send().ReturnCustom(fn)` |
+
+`Reset()` is unchanged. Methods with no returns still expose only `Reset()`.
+Custom-template authors: `MethodData.ReturnsSetterName` is now `"ReturnAll"` (was `"Returns"`); per-return setter `MethodName` is now the bare return name (e.g. `"Id"`, was `"ReturnsId"`); new fields `MethodData.CustomReturnSetterName` (`"ReturnCustom"`) and `MethodData.PerReturnSetterType` (e.g. `"serviceMockSendReturn"`) expose the renamed handler setter and the new per-return setter type respectively.
+
 v0.10.0 renamed `--thread-safe` to `--async` (and `Options.MakeThreadSafe` to `Options.Async`). Behavior under the old flag is unchanged; under the new flag, every `Calls()` namespace also gains `WaitForCount(n, timeout)` and `WaitForCall(predicate, timeout)`. Migration: `s/--thread-safe/--async/g` in `//go:generate` directives, `s/MakeThreadSafe/Async/g` in programmatic uses.
 
 v0.9.0 is a complete API rewrite from v0.8.x. The old snake-case accessors (`Send_calls()`, `Send_call(i)`, `Send_return(handler)`) are gone. Migration:
@@ -283,8 +300,8 @@ v0.9.0 is a complete API rewrite from v0.8.x. The old snake-case accessors (`Sen
 | `mock.Send_calls()` | `mock.Calls().Send().All()` |
 | `mock.Send_call(i)` | `mock.Calls().Send().At(i)` |
 | `mock.Send_call_count()` | `mock.Calls().Send().Count()` |
-| `mock.Send_return(handler)` | `mock.On().Send().Handler(handler)` |
-| `mock.Send_return_X(value)` | `mock.On().Send().ReturnsX(value)` |
+| `mock.Send_return(handler)` | `mock.On().Send().ReturnCustom(handler)` (was `Handler` pre-v0.11) |
+| `mock.Send_return_X(value)` | `mock.On().Send().Return().X(value)` (was `ReturnsX` pre-v0.11) |
 | `mock.Reset_history()` | `mock.Calls().Reset()` (or `mock.Reset()` to also clear cfg) |
 | `c.X` (where X is title-cased param) | `c.Param.X` |
 | (returns were not recorded per call) | `c.Return.X` |

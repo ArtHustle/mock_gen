@@ -13,7 +13,8 @@ import (
 
 // Behavior tests generate a mock, write a tiny Go test file alongside it
 // that exercises the runtime API (Calls/On/Reset, At/Last/All/Count,
-// Returns/Handler, Param/Return capture), and run `go test` on the tempdir.
+// ReturnAll/Return/ReturnCustom, Param/Return capture), and run `go test`
+// on the tempdir.
 //
 // String-match tests can verify the generated *shape*; only running the
 // mock proves the *semantics*. Each entry costs a `go test` (~1-3s). Keep
@@ -46,9 +47,9 @@ type Service interface {
 	Send(email string) (id string, err error)
 }`, `
 m := &ServiceMock{}
-m.On().Send().Returns("ID-1", nil)
+m.On().Send().ReturnAll("ID-1", nil)
 m.Send("a")
-m.On().Send().Returns("ID-2", nil)
+m.On().Send().ReturnAll("ID-2", nil)
 m.Send("b")
 
 c0 := m.Calls().Send().At(0)
@@ -104,14 +105,14 @@ if m.Calls().Send().At(0).Param.Email != "a" {
 `, Options{})
 	})
 
-	It("On().M().Returns(...) sets static return values used by interface calls", func() {
+	It("On().M().ReturnAll(...) sets static return values used by interface calls", func() {
 		runMockBehavior(`package svc
 
 type Service interface {
 	Get() (string, error)
 }`, `
 m := &ServiceMock{}
-m.On().Get().Returns("hello", nil)
+m.On().Get().ReturnAll("hello", nil)
 
 s, err := m.Get()
 if s != "hello" || err != nil {
@@ -120,15 +121,15 @@ if s != "hello" || err != nil {
 `, Options{})
 	})
 
-	It("On().M().ReturnsX(...) overrides individual return values without touching others", func() {
+	It("On().M().Return().X(...) overrides individual return values without touching others", func() {
 		runMockBehavior(`package svc
 
 type Service interface {
 	Get() (id string, count int, err error)
 }`, `
 m := &ServiceMock{}
-m.On().Get().Returns("default", 42, nil)
-m.On().Get().ReturnsErr(errorsNew("override"))
+m.On().Get().ReturnAll("default", 42, nil)
+m.On().Get().Return().Err(errorsNew("override"))
 
 id, count, err := m.Get()
 if id != "default" || count != 42 {
@@ -140,15 +141,53 @@ if err == nil || err.Error() != "override" {
 `, Options{}, `import errorsPkg "errors"`, `var errorsNew = errorsPkg.New`)
 	})
 
-	It("On().M().Handler(...) overrides static returns with a dynamic function", func() {
+	It("ReturnAll(...) after Return().X(...) overwrites every cfg slot positionally", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Get() (id string, count int, err error)
+}`, `
+m := &ServiceMock{}
+m.On().Get().Return().Id("from-individual")
+m.On().Get().Return().Count(99)
+m.On().Get().ReturnAll("from-all", 1, nil)
+
+id, count, err := m.Get()
+if id != "from-all" || count != 1 || err != nil {
+	t.Fatalf("Get() = (%q, %d, %v), want (from-all, 1, nil) — ReturnAll must overwrite prior Return().X", id, count, err)
+}
+`, Options{})
+	})
+
+	It("On().M().Reset() clears ReturnAll, Return().X, and ReturnCustom together", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Get() (id string, err error)
+}`, `
+m := &ServiceMock{}
+m.On().Get().ReturnAll("a", nil)
+m.On().Get().Return().Id("b")
+m.On().Get().ReturnCustom(func() (string, error) { return "from-handler", nil })
+
+m.On().Get().Reset()
+
+id, err := m.Get()
+if id != "" || err != nil {
+	t.Fatalf("after Reset, Get() = (%q, %v), want (\"\", nil)", id, err)
+}
+`, Options{})
+	})
+
+	It("On().M().ReturnCustom(...) overrides static returns with a dynamic function", func() {
 		runMockBehavior(`package svc
 
 type Service interface {
 	Send(email string) (id string, err error)
 }`, `
 m := &ServiceMock{}
-m.On().Send().Returns("STATIC", nil)
-m.On().Send().Handler(func(email string) (string, error) {
+m.On().Send().ReturnAll("STATIC", nil)
+m.On().Send().ReturnCustom(func(email string) (string, error) {
 	return "HANDLER:" + email, nil
 })
 
@@ -167,7 +206,7 @@ type Service interface {
 }`, `
 m := &ServiceMock{}
 n := 0
-m.On().Send().Handler(func(email string) (string, error) {
+m.On().Send().ReturnCustom(func(email string) (string, error) {
 	n++
 	if n == 1 {
 		return "first", nil
@@ -197,7 +236,7 @@ type Service interface {
 	Close() error
 }`, `
 m := &ServiceMock{}
-m.On().Send().ReturnsError(errorsNew("injected"))
+m.On().Send().Return().Error(errorsNew("injected"))
 m.Send("a")
 m.Close()
 
@@ -220,7 +259,7 @@ type Service interface {
 	Get() (string, error)
 }`, `
 m := &ServiceMock{}
-m.On().Get().Returns("armed", nil)
+m.On().Get().ReturnAll("armed", nil)
 m.Get()
 
 m.Calls().Reset()
@@ -243,7 +282,7 @@ type Service interface {
 	Get() (string, error)
 }`, `
 m := &ServiceMock{}
-m.On().Get().Returns("armed", nil)
+m.On().Get().ReturnAll("armed", nil)
 m.Get()
 
 m.On().Reset()
@@ -289,8 +328,8 @@ type Service interface {
 	B() (string, error)
 }`, `
 m := &ServiceMock{}
-m.On().A().Returns("a-val", nil)
-m.On().B().Returns("b-val", nil)
+m.On().A().ReturnAll("a-val", nil)
+m.On().B().ReturnAll("b-val", nil)
 
 m.On().A().Reset()
 
@@ -375,7 +414,7 @@ type Service interface {
 	On() error
 }`, `
 m := &ServiceMock{}
-m.Configure().On().ReturnsError(nil)
+m.Configure().On().Return().Error(nil)
 err := m.On()
 if err != nil {
 	t.Fatalf("On() = %v, want nil", err)
@@ -395,7 +434,7 @@ type Service interface {
 	Greet(name string) string
 }`, `
 m := NewServiceMock()
-m.On().Greet().Returns("hi")
+m.On().Greet().ReturnAll("hi")
 if got := m.Greet("world"); got != "hi" {
 	t.Fatalf("Greet() = %q, want hi", got)
 }
@@ -429,7 +468,7 @@ type Service interface {
 m := NewServiceMock()
 
 // Full chain works without ever naming an unexported type:
-m.On().Send().Returns(nil)
+m.On().Send().ReturnAll(nil)
 m.Send("a")
 if m.Calls().Send().Count() != 1 {
 	t.Fatal("count")
@@ -452,7 +491,7 @@ type Service interface {
 	Send(email string) error
 }`, `
 m := &ServiceMock{}
-m.On().Send().Handler(func(email string) error {
+m.On().Send().ReturnCustom(func(email string) error {
 	panic("handler exploded")
 })
 
@@ -477,7 +516,7 @@ type Service interface {
 	Send(email string) error
 }`, `
 m := &ServiceMock{}
-m.On().Send().Handler(func(email string) error {
+m.On().Send().ReturnCustom(func(email string) error {
 	panic("ts-handler exploded")
 })
 
@@ -534,8 +573,8 @@ type Service interface {
 	Greet() string
 }`, `
 m := &ServiceMock{}
-m.On().Greet().Returns("hi")
-m.On().Close().Returns(nil)
+m.On().Greet().ReturnAll("hi")
+m.On().Close().ReturnAll(nil)
 
 if got := m.Greet(); got != "hi" {
 	t.Fatalf("Greet() = %q, want hi", got)
@@ -642,7 +681,7 @@ type Service interface {
 }`, `
 m := &ServiceMock{}
 n := 0
-m.On().Send().Handler(func(email string) (string, error) {
+m.On().Send().ReturnCustom(func(email string) (string, error) {
 	n++
 	if n == 1 {
 		return "", errorsNew("first-fail")
@@ -786,7 +825,7 @@ type Service interface {
 	Tick() error
 }`, `
 m := &ServiceMock{}
-m.On().Tick().Returns(nil)
+m.On().Tick().ReturnAll(nil)
 go func() {
 	timePkg.Sleep(5 * timePkg.Millisecond)
 	m.Tick()

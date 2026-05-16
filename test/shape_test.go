@@ -368,32 +368,25 @@ func (this serviceMockOn) Send() serviceMockSendOn {
 
 type serviceMockSendOn struct{ m *ServiceMock }
 
-// Returns sets all static return values for Send.
-// Used when no Handler is installed.
-func (this serviceMockSendOn) Returns(id string, err error) {
+// ReturnAll sets all static return values for Send
+// positionally. Used when no ReturnCustom handler is installed.
+func (this serviceMockSendOn) ReturnAll(id string, err error) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg.id = id
 	this.m.sendCfg.err = err
 }
 
-// ReturnsId overrides just the id return value.
-func (this serviceMockSendOn) ReturnsId(value string) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.sendCfg.id = value
+// Return returns the per-return setter namespace — one method per return
+// value of Send, each overriding just that return without
+// touching the others.
+func (this serviceMockSendOn) Return() serviceMockSendReturn {
+	return serviceMockSendReturn{m: this.m}
 }
 
-// ReturnsErr overrides just the err return value.
-func (this serviceMockSendOn) ReturnsErr(value error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.sendCfg.err = value
-}
-
-// Handler installs a dynamic function called instead of returning the
+// ReturnCustom installs a dynamic function called instead of returning the
 // configured static values.
-func (this serviceMockSendOn) Handler(value func(context.Context, string) (string, error)) {
+func (this serviceMockSendOn) ReturnCustom(value func(context.Context, string) (string, error)) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg.handler = value
@@ -404,6 +397,25 @@ func (this serviceMockSendOn) Reset() {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	this.m.sendCfg = serviceMockSendCfg{}
+}
+
+// serviceMockSendReturn is the per-return setter namespace for
+// Send. Each method overrides one return value without
+// touching the others.
+type serviceMockSendReturn struct{ m *ServiceMock }
+
+// Id overrides just the id return value.
+func (this serviceMockSendReturn) Id(value string) {
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+	this.m.sendCfg.id = value
+}
+
+// Err overrides just the err return value.
+func (this serviceMockSendReturn) Err(value error) {
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+	this.m.sendCfg.err = value
 }
 
 // callIndex resolves the index argument of Method_call(i)-style indexers:

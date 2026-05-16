@@ -221,8 +221,8 @@ func (this {{$iface.ConfigType}}) Reset() {
 {{end}}{{/* ===== Per-method configuration types ===== */}}
 {{range $method := $iface.Methods}}type {{$method.ConfigMethodType}} struct{ m *{{$iface.MockName}} }
 
-{{if $method.ReturnFields}}// Returns sets all static return values for {{$method.Name}}.
-// Used when no Handler is installed.
+{{if $method.ReturnFields}}// {{$method.ReturnsSetterName}} sets all static return values for {{$method.Name}}
+// positionally. Used when no {{$method.CustomReturnSetterName}} handler is installed.
 func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $i, $rf := $method.CfgReturnFields}}{{if $i}}, {{end}}{{$rf.Name}} {{$rf.Type}}{{end}}) {
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
@@ -230,17 +230,16 @@ func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $
 {{end}}{{range $method.CfgReturnFields}}	this.m.{{$method.CfgField}}.{{.Name}} = {{.Name}}
 {{end}}}
 
-{{range $method.IndividualReturnSetters}}// {{.MethodName}} overrides just the {{.FieldName}} return value.
-func (this {{$method.ConfigMethodType}}) {{.MethodName}}(value {{.ParamType}}) {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	this.m.{{$method.CfgField}}.{{.FieldName}} = value
+// Return returns the per-return setter namespace — one method per return
+// value of {{$method.Name}}, each overriding just that return without
+// touching the others.
+func (this {{$method.ConfigMethodType}}) Return() {{$method.PerReturnSetterType}} {
+	return {{$method.PerReturnSetterType}}{m: this.m}
 }
 
-{{end}}// Handler installs a dynamic function called instead of returning the
+// {{$method.CustomReturnSetterName}} installs a dynamic function called instead of returning the
 // configured static values.
-func (this {{$method.ConfigMethodType}}) Handler(value {{$method.HandlerType}}) {
+func (this {{$method.ConfigMethodType}}) {{$method.CustomReturnSetterName}}(value {{$method.HandlerType}}) {
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
@@ -255,7 +254,20 @@ func (this {{$method.ConfigMethodType}}) Reset() {
 {{end}}	this.m.{{$method.CfgField}} = {{$method.CfgType}}{}
 }
 
-{{end}}{{/* ===== callIndex helper (per mock) ===== */}}
+{{if $method.ReturnFields}}// {{$method.PerReturnSetterType}} is the per-return setter namespace for
+// {{$method.Name}}. Each method overrides one return value without
+// touching the others.
+type {{$method.PerReturnSetterType}} struct{ m *{{$iface.MockName}} }
+
+{{range $method.IndividualReturnSetters}}// {{.MethodName}} overrides just the {{.FieldName}} return value.
+func (this {{$method.PerReturnSetterType}}) {{.MethodName}}(value {{.ParamType}}) {
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	this.m.{{$method.CfgField}}.{{.FieldName}} = value
+}
+
+{{end}}{{end}}{{end}}{{/* end range setters / if ReturnFields / range $method */}}{{/* ===== callIndex helper (per mock) ===== */}}
 // callIndex resolves the index argument of Method_call(i)-style indexers:
 // negative i counts from the end; out-of-range i panics with a message
 // that surfaces both the original input and the log length.

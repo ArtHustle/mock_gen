@@ -375,12 +375,22 @@ type MethodData struct {
 	// (e.g. "ServiceMockSendOn"). Hangs off the InterfaceData's
 	// ConfigType.
 	ConfigMethodType string
+	// PerReturnSetterType is the unexported type name for the per-return
+	// setter namespace returned by `Return()` on the per-method config
+	// object (e.g. "serviceMockSendReturn"). Empty when the method has
+	// no returns.
+	PerReturnSetterType string
 
 	// ReturnsSetterName is the setter that takes all returns positionally
-	// (e.g. "Returns"). Empty when the method has no returns.
+	// (e.g. "ReturnAll"). Empty when the method has no returns.
 	ReturnsSetterName string
-	// IndividualReturnSetters are per-return setters like "ReturnsID",
-	// "ReturnsErr". One per return value.
+	// CustomReturnSetterName is the setter that installs a dynamic
+	// function returning the values (e.g. "ReturnCustom"). Empty when
+	// the method has no returns.
+	CustomReturnSetterName string
+	// IndividualReturnSetters are per-return setters living under the
+	// `Return()` namespace — MethodName is the bare return name
+	// (e.g. "Id", "Err"). One per return value.
 	IndividualReturnSetters []SetterMethod
 }
 
@@ -902,12 +912,14 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 	if sig.Results().Len() > 0 {
 		methodData.HandlerFieldName = "handler"
 		methodData.HandlerType = this.handlerFuncType(sig)
-		methodData.ReturnsSetterName = "Returns"
+		methodData.ReturnsSetterName = "ReturnAll"
+		methodData.CustomReturnSetterName = "ReturnCustom"
+		methodData.PerReturnSetterType = unexportedTypeName(mockName + method.Name() + "Return")
 		for i, rf := range methodData.ReturnFields {
 			methodData.IndividualReturnSetters = append(
 				methodData.IndividualReturnSetters,
 				SetterMethod{
-					MethodName: "Returns" + rf.Name,
+					MethodName: rf.Name,
 					FieldName:  methodData.CfgReturnFields[i].Name,
 					ParamType:  rf.Type,
 				},

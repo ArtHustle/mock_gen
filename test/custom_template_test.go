@@ -110,6 +110,8 @@ type Service interface {
 // CfgReturnFields: {{range .CfgReturnFields}}{{.Name}}:{{.Type}} {{end}}
 // Handler: {{.HandlerFieldName}} type: {{.HandlerType}}
 // Returns setter: {{.ReturnsSetterName}}
+// Custom setter: {{.CustomReturnSetterName}}
+// Per-return type: {{.PerReturnSetterType}}
 {{range .IndividualReturnSetters}}// Setter: {{.MethodName}}({{.ParamType}}) -> {{.FieldName}}
 {{end}}{{end}}{{end}}
 type Stub struct{}
@@ -129,12 +131,14 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring("// ReturnFields: Id:string Err:error"))
 		Expect(out).To(ContainSubstring("// CfgReturnFields: id:string err:error"))
 		Expect(out).To(ContainSubstring("// Handler: handler type: func(string) (string, error)"))
-		Expect(out).To(ContainSubstring("// Returns setter: Returns"))
-		Expect(out).To(ContainSubstring("// Setter: ReturnsId(string) -> id"))
-		Expect(out).To(ContainSubstring("// Setter: ReturnsErr(error) -> err"))
+		Expect(out).To(ContainSubstring("// Returns setter: ReturnAll"))
+		Expect(out).To(ContainSubstring("// Custom setter: ReturnCustom"))
+		Expect(out).To(ContainSubstring("// Per-return type: serviceMockSendReturn"))
+		Expect(out).To(ContainSubstring("// Setter: Id(string) -> id"))
+		Expect(out).To(ContainSubstring("// Setter: Err(error) -> err"))
 	})
 
-	It("methods with no returns have no HandlerFieldName, no ReturnsSetterName, no IndividualReturnSetters", func() {
+	It("methods with no returns have no HandlerFieldName, no ReturnsSetterName, no CustomReturnSetterName, no PerReturnSetterType, no IndividualReturnSetters", func() {
 		input := `package pkg
 
 type Service interface {
@@ -144,6 +148,8 @@ type Service interface {
 
 {{range .Interfaces}}{{range .Methods}}// handler={{.HandlerFieldName | printf "%q"}}
 // returns-setter={{.ReturnsSetterName | printf "%q"}}
+// custom-setter={{.CustomReturnSetterName | printf "%q"}}
+// per-return-type={{.PerReturnSetterType | printf "%q"}}
 // ind-setters={{len .IndividualReturnSetters}}
 {{end}}{{end}}
 type Stub struct{}
@@ -152,6 +158,8 @@ type Stub struct{}
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring(`// handler=""`))
 		Expect(out).To(ContainSubstring(`// returns-setter=""`))
+		Expect(out).To(ContainSubstring(`// custom-setter=""`))
+		Expect(out).To(ContainSubstring(`// per-return-type=""`))
 		Expect(out).To(ContainSubstring("// ind-setters=0"))
 	})
 

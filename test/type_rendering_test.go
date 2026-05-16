@@ -502,6 +502,41 @@ type Service interface {
 		Expect(out).To(ContainSubstring("func (this serviceMockCloseCalls) WaitForCall("))
 	})
 
+	// --- per-method config setter emission (v0.11) ---
+
+	It("a method with no returns gets only Reset on its config object (no ReturnAll/Return/ReturnCustom)", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
+
+type Service interface {
+	Tick()
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).NotTo(ContainSubstring(") ReturnAll("),
+			"ReturnAll must not be emitted for a method with no returns")
+		Expect(out).NotTo(ContainSubstring(") Return()"),
+			"Return() per-return namespace must not be emitted for a method with no returns")
+		Expect(out).NotTo(ContainSubstring(") ReturnCustom("),
+			"ReturnCustom must not be emitted for a method with no returns")
+		// The per-return setter type itself must not be declared either.
+		Expect(out).NotTo(ContainSubstring("serviceMockTickReturn struct{ m"),
+			"the per-return setter type must not be declared for a method with no returns")
+		// Reset still exists on the per-method config object.
+		Expect(out).To(ContainSubstring("func (this serviceMockTickOn) Reset()"))
+	})
+
+	It("a single-return method emits ReturnAll, Return().<Name>, and ReturnCustom (no arity-1 special case)", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
+
+type Service interface {
+	Greet(name string) string
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) ReturnAll(string string)"))
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Return() serviceMockGreetReturn"))
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) ReturnCustom(value func(string) string)"))
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetReturn) String(value string)"))
+	})
+
 	It("non-empty inline interface renders methods inline", func() {
 		out, err := GenerateMockContentWithOptions(`package pkg
 
