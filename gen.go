@@ -668,12 +668,15 @@ func (this *generator) collectImportsData(importPackages []*types.Package, hasIn
 		impPath := pkg.Path()
 		alias, hasAlias := this.importPathToAlias[impPath]
 
+		// Emit an explicit `alias "path"` whenever the alias used in type
+		// references differs from the package's actual name (which is what
+		// Go would default to without an alias). This catches:
+		//   - collision-resolved aliases (e.g. bModel "path/b/model")
+		//   - same-package types where the module path's last segment
+		//     differs from the package name (issue #20)
 		useAlias := true
-		if hasAlias {
-			lastSlash := strings.LastIndex(impPath, "/")
-			if alias == impPath[lastSlash+1:] {
-				useAlias = false
-			}
+		if hasAlias && alias == pkg.Name() {
+			useAlias = false
 		}
 
 		impStr := strconv.Quote(impPath)

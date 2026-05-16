@@ -1048,7 +1048,7 @@ type Service interface { Add(MyParam) MyReturn }`,
 import (
 	"strconv"
 
-	"mock_gen"
+	mock_gen "mock_gen"
 )
 
 type ServiceMock_Add_Call struct {
@@ -1115,7 +1115,7 @@ type Service interface { Add(MyID) (MyID) }`,
 import (
 	"strconv"
 
-	"mock_gen"
+	mock_gen "mock_gen"
 )
 
 type ServiceMock_Add_Call struct {
@@ -1247,7 +1247,7 @@ type Service interface { Add(MyID, MyID) (MyID, error) }`,
 import (
 	"strconv"
 
-	"mock_gen"
+	mock_gen "mock_gen"
 )
 
 type ServiceMock_Add_Call struct {
@@ -1320,7 +1320,7 @@ type Service interface { Add(gen[amount, int]) }`,
 import (
 	"strconv"
 
-	"mock_gen"
+	mock_gen "mock_gen"
 )
 
 type ServiceMock_Add_Call struct {
@@ -1380,7 +1380,7 @@ type Service interface { Add(gen[[]gen[int]]) }`,
 import (
 	"strconv"
 
-	"mock_gen"
+	mock_gen "mock_gen"
 )
 
 type ServiceMock_Add_Call struct {
@@ -1442,7 +1442,7 @@ import (
 	"io"
 	"strconv"
 
-	"mock_gen"
+	mock_gen "mock_gen"
 )
 
 type ServiceMock_Add_Call struct {
@@ -2122,7 +2122,7 @@ import (
 	"time"
 
 	"github.com/ArtHustle/mock_gen/test/dummy"
-	"mock_gen"
+	mock_gen "mock_gen"
 )
 
 type ServiceMock_Add_Call struct {

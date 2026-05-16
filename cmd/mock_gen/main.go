@@ -22,6 +22,14 @@ func determineOutputFile(inputFilePath string) string {
 }
 
 func storeToFile(filePath, content string) {
+	// Skip the write if the existing file is byte-identical. Preserves mtime,
+	// avoiding spurious git noise and unnecessary build-cache invalidations
+	// when `mock_gen` runs as part of `go generate` over an unchanged source.
+	if existing, err := os.ReadFile(filePath); err == nil && string(existing) == content {
+		fmt.Println("Mock unchanged:", filePath)
+		return
+	}
+
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		fmt.Println("Failed to create output dir:", err)
 		os.Exit(1)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -78,6 +79,82 @@ var _ = Describe("CLI", func() {
 
 		It("writes an output file when the source path follows `--`", func() {
 			runWithParams("--", inputFilePath)
+		})
+	})
+
+	// Idempotent writes: if the generated content matches what's already on
+	// disk byte-for-byte, the CLI should leave the file's mtime unchanged.
+	// Preserves build caches and avoids spurious git noise when running
+	// `go generate` in a loop. (#5)
+	Context("when run twice with no source change", func() {
+		var tempDir, srcPath, outPath string
+
+		BeforeEach(func() {
+			var err error
+			tempDir, err = os.MkdirTemp(os.TempDir(), "mock_gen_idem_test_")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { os.RemoveAll(tempDir) })
+
+			Expect(os.WriteFile(
+				filepath.Join(tempDir, "go.mod"),
+				[]byte("module idem_test\n\ngo 1.23\n"),
+				0644,
+			)).To(Succeed())
+
+			srcPath = filepath.Join(tempDir, "svc.go")
+			Expect(os.WriteFile(srcPath, []byte(`package svc
+
+type Service interface {
+	Do(x int) error
+}
+`), 0644)).To(Succeed())
+
+			outPath = filepath.Join(tempDir, "test", "svc_mock.go")
+		})
+
+		runGen := func() {
+			command := exec.Command(mockGeneratorPath, srcPath)
+			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session).Should(gexec.Exit(0))
+		}
+
+		It("does not rewrite the output file when content is unchanged", func() {
+			runGen()
+			before, err := os.Stat(outPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Sleep just long enough that any rewrite would show a different mtime.
+			// File-system mtime resolution on macOS APFS is nanosecond, on some
+			// Linux filesystems it's 1s. 1.1s is safe everywhere.
+			time.Sleep(1100 * time.Millisecond)
+			runGen()
+
+			after, err := os.Stat(outPath)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after.ModTime()).To(Equal(before.ModTime()),
+				"second run with unchanged source must not rewrite the file")
+		})
+
+		It("does rewrite when the source changes", func() {
+			runGen()
+			before, err := os.Stat(outPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			time.Sleep(1100 * time.Millisecond)
+			Expect(os.WriteFile(srcPath, []byte(`package svc
+
+type Service interface {
+	Do(x int) error
+	Another() string
+}
+`), 0644)).To(Succeed())
+			runGen()
+
+			after, err := os.Stat(outPath)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after.ModTime()).NotTo(Equal(before.ModTime()),
+				"changed source must trigger a rewrite")
 		})
 	})
 
