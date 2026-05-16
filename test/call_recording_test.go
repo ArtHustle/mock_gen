@@ -72,6 +72,19 @@ type Service interface {
 	Emit(out chan<- int)
 }`,
 			"type ServiceMock_Emit_Call struct {\n\tOut chan<- int\n}"),
+
+		// Inline interface methods render in alphabetical order with param
+		// names dropped (the underlying *types.Interface enumerates methods
+		// alphabetically; renderSignature emits types only). gofmt then
+		// reflows the inline interface across multiple lines. The output is
+		// a valid Go interface type — semantically identical to the source.
+		Entry("non-empty inline interface param renders methods inline", `
+package pkg
+
+type Service interface {
+	Visit(v interface{ Read(p []byte) (n int, err error); Close() error })
+}`,
+			"V interface {\n\t\tClose() error\n\t\tRead([]byte) (int, error)\n\t}"),
 	)
 
 	// --- ordering invariants the literal entries verify implicitly, but
@@ -112,7 +125,7 @@ type Service interface {
 		lockIdx := strings.Index(body, "this.mu.Lock()")
 		appendIdx := strings.Index(body, "this.send_calls_log = append(")
 		unlockIdx := strings.Index(body, "this.mu.Unlock()")
-		handlerIdx := strings.Index(body, "if _handler != nil")
+		handlerIdx := strings.Index(body, "if __mockHandler != nil")
 
 		Expect(lockIdx).To(BeNumerically(">", 0))
 		Expect(appendIdx).To(BeNumerically(">", lockIdx))
@@ -232,6 +245,57 @@ type Service interface {
 		Expect(body).To(ContainSubstring("this.mu.Lock()"))
 		Expect(body).To(ContainSubstring("defer this.mu.Unlock()"))
 	})
+
+	// --- friendly error on user methods that collide with generator-emitted ones ---
+	//
+	// The generator emits a fixed set of method names per source method
+	// (`<X>_calls`, `<X>_call`, `<X>_call_count`, `<X>_return*`) and the
+	// mock-level `Reset_history`. If a user interface declares a method
+	// whose name lands in this set, the generator must reject the input
+	// with a clear error pointing at the offending method (#19), instead
+	// of silently producing a Go file with two methods of the same name.
+
+	DescribeTable("rejects interfaces whose method names collide with generator-emitted names",
+		func(source string, expectedSubstring string) {
+			_, err := GenerateMockContentWithOptions(source, Options{})
+			Expect(err).To(HaveOccurred(), "expected an error from the generator")
+			Expect(err.Error()).To(ContainSubstring(expectedSubstring))
+		},
+		Entry("method named Reset_history collides with mock-level reset", `
+package pkg
+
+type Service interface {
+	Reset_history()
+}`, "Reset_history"),
+		Entry("method named like another method's _calls accessor", `
+package pkg
+
+type Service interface {
+	Send()
+	Send_calls()
+}`, "Send_calls"),
+		Entry("method named like another method's _call indexer", `
+package pkg
+
+type Service interface {
+	Send()
+	Send_call()
+}`, "Send_call"),
+		Entry("method named like another method's _call_count accessor", `
+package pkg
+
+type Service interface {
+	Send()
+	Send_call_count()
+}`, "Send_call_count"),
+		Entry("method named like another method's _return_X setter", `
+package pkg
+
+type Service interface {
+	Get() (value int, err error)
+	Get_return_value()
+}`, "Get_return_value"),
+	)
 
 	// --- cross-mock uniqueness: two interfaces in one source must produce
 	// distinct Call struct names per (mock, method) pair, so they don't collide

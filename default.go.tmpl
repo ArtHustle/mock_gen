@@ -23,14 +23,14 @@
 {{- if and $.Options.MakeThreadSafe $method.Returns}}
 	this.mu.Lock()
 	this.{{$method.CallsLogField}} = append(this.{{$method.CallsLogField}}, {{$method.CallStructName}}{ {{- range $i, $f := $method.CallStructFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
-{{if $method.ReturnHandler}}	_handler := this.{{$method.ReturnHandler.FieldName}}
-{{end}}{{range $i, $rf := $method.Signature.ReturnFields}}	_r{{$i}} := {{$rf}}
+{{if $method.ReturnHandler}}	__mockHandler := this.{{$method.ReturnHandler.FieldName}}
+{{end}}{{range $i, $rf := $method.Signature.ReturnFields}}	__mockR{{$i}} := {{$rf}}
 {{end}}	this.mu.Unlock()
 
-{{if $method.ReturnHandler}}	if _handler != nil {
-		return _handler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
+{{if $method.ReturnHandler}}	if __mockHandler != nil {
+		return __mockHandler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
 	}
-{{end}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}_r{{$i}}{{end}}
+{{end}}	return {{range $i, $rf := $method.Signature.ReturnFields}}{{if $i}}, {{end}}__mockR{{$i}}{{end}}
 {{else}}
 {{- if $.Options.MakeThreadSafe}}
 	this.mu.Lock()

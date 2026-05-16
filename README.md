@@ -96,9 +96,11 @@ func (this *ServiceMock) Reset_history() { /* ... */ }
 func (this *ServiceMock) callIndex(length, i int) int { /* ... */ }
 ```
 
-Same-package types (value types, slices, pointers) are fully supported and automatically qualified with the source package import path in the generated mock.
+Same-package types (value types, slices, pointers) are fully supported and automatically qualified with the source package import path in the generated mock. Function-typed params/returns, inline `struct{...}` and `interface{...}` types, generics, type aliases, and embedded interfaces all render correctly. Empty `interface{}` renders as `any`.
 
 The shape is method-based by default: fields are unexported and accessed through generated getters/setters, every method gets a full call-recording log (see [Call Recording](#call-recording)), and adding `--thread-safe` later only adds internal locking — the API surface is identical.
+
+If the source interface declares a method whose name collides with a generator-emitted method (`Reset_history`, `<X>_calls`, `<X>_call`, `<X>_call_count`, `<X>_return*`), the generator rejects the input with an error pointing at the offending method. Rename to resolve.
 
 ## Return Handler
 

@@ -49,10 +49,10 @@ type ServiceMock struct {
 func (this *ServiceMock) Add(one int) string {
 	this.mu.Lock()
 	this.add_calls_log = append(this.add_calls_log, ServiceMock_Add_Call{One: one})
-	_r0 := this.add_return_string
+	__mockR0 := this.add_return_string
 	this.mu.Unlock()
 
-	return _r0
+	return __mockR0
 }
 
 func (this *ServiceMock) Add_calls() []ServiceMock_Add_Call {
@@ -188,14 +188,14 @@ func (this *ServiceMock) Process_call_count() int {
 func (this *ServiceMock) Send(one int) error {
 	this.mu.Lock()
 	this.send_calls_log = append(this.send_calls_log, ServiceMock_Send_Call{One: one})
-	_handler := this.send_return
-	_r0 := this.send_return_error
+	__mockHandler := this.send_return
+	__mockR0 := this.send_return_error
 	this.mu.Unlock()
 
-	if _handler != nil {
-		return _handler(one)
+	if __mockHandler != nil {
+		return __mockHandler(one)
 	}
-	return _r0
+	return __mockR0
 }
 
 func (this *ServiceMock) Send_calls() []ServiceMock_Send_Call {
@@ -279,14 +279,14 @@ type ServiceMock struct {
 func (this *ServiceMock) Get() string {
 	this.mu.Lock()
 	this.get_calls_log = append(this.get_calls_log, ServiceMock_Get_Call{})
-	_handler := this.get_return
-	_r0 := this.get_return_string
+	__mockHandler := this.get_return
+	__mockR0 := this.get_return_string
 	this.mu.Unlock()
 
-	if _handler != nil {
-		return _handler()
+	if __mockHandler != nil {
+		return __mockHandler()
 	}
-	return _r0
+	return __mockR0
 }
 
 func (this *ServiceMock) Get_calls() []ServiceMock_Get_Call {
@@ -378,15 +378,15 @@ type ServiceMock struct {
 func (this *ServiceMock) Do(ctx context.Context, r *http.Request) (*http.Response, error) {
 	this.mu.Lock()
 	this.do_calls_log = append(this.do_calls_log, ServiceMock_Do_Call{Ctx: ctx, R: r})
-	_handler := this.do_return
-	_r0 := this.do_return_response
-	_r1 := this.do_return_error
+	__mockHandler := this.do_return
+	__mockR0 := this.do_return_response
+	__mockR1 := this.do_return_error
 	this.mu.Unlock()
 
-	if _handler != nil {
-		return _handler(ctx, r)
+	if __mockHandler != nil {
+		return __mockHandler(ctx, r)
 	}
-	return _r0, _r1
+	return __mockR0, __mockR1
 }
 
 func (this *ServiceMock) Do_calls() []ServiceMock_Do_Call {
@@ -476,14 +476,14 @@ type ServiceMock struct {
 func (this *ServiceMock) Log(values ...int) error {
 	this.mu.Lock()
 	this.log_calls_log = append(this.log_calls_log, ServiceMock_Log_Call{Values: values})
-	_handler := this.log_return
-	_r0 := this.log_return_error
+	__mockHandler := this.log_return
+	__mockR0 := this.log_return_error
 	this.mu.Unlock()
 
-	if _handler != nil {
-		return _handler(values)
+	if __mockHandler != nil {
+		return __mockHandler(values)
 	}
-	return _r0
+	return __mockR0
 }
 
 func (this *ServiceMock) Log_calls() []ServiceMock_Log_Call {
@@ -569,16 +569,16 @@ type ServiceMock struct {
 func (this *ServiceMock) Fetch(id int) (name string, age int, err error) {
 	this.mu.Lock()
 	this.fetch_calls_log = append(this.fetch_calls_log, ServiceMock_Fetch_Call{Id: id})
-	_handler := this.fetch_return
-	_r0 := this.fetch_return_name
-	_r1 := this.fetch_return_age
-	_r2 := this.fetch_return_err
+	__mockHandler := this.fetch_return
+	__mockR0 := this.fetch_return_name
+	__mockR1 := this.fetch_return_age
+	__mockR2 := this.fetch_return_err
 	this.mu.Unlock()
 
-	if _handler != nil {
-		return _handler(id)
+	if __mockHandler != nil {
+		return __mockHandler(id)
 	}
-	return _r0, _r1, _r2
+	return __mockR0, __mockR1, __mockR2
 }
 
 func (this *ServiceMock) Fetch_calls() []ServiceMock_Fetch_Call {
@@ -672,7 +672,7 @@ type Service interface {
 		body = body[:strings.Index(body, "\n}\n")]
 
 		unlockIdx := strings.Index(body, "this.mu.Unlock()")
-		handlerIdx := strings.Index(body, "if _handler != nil")
+		handlerIdx := strings.Index(body, "if __mockHandler != nil")
 		Expect(unlockIdx).To(BeNumerically(">", 0), "Unlock() should appear in body")
 		Expect(handlerIdx).To(BeNumerically(">", 0), "handler check should appear in body")
 		Expect(unlockIdx).To(BeNumerically("<", handlerIdx),

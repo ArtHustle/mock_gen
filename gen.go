@@ -136,6 +136,14 @@ func (this *generator) collectInterfaceImports(
 			for i := range typ.Results().Len() {
 				collectImportsFromType(typ.Results().At(i).Type())
 			}
+		case *types.Struct:
+			for i := range typ.NumFields() {
+				collectImportsFromType(typ.Field(i).Type())
+			}
+		case *types.Interface:
+			for i := range typ.NumMethods() {
+				collectImportsFromType(typ.Method(i).Type())
+			}
 		}
 	}
 
@@ -163,6 +171,20 @@ func toTitle(s string) string {
 	}
 	r, size := utf8.DecodeRuneInString(s)
 	return string(unicode.ToTitle(r)) + s[size:]
+}
+
+// exportedFieldName produces a Go-exported (capitalized) field name from a
+// source identifier. Leading underscores are stripped first — they're a
+// Go convention for "intentionally unused", which doesn't translate to the
+// public surface of a recorded-call struct. If the input is all underscores
+// or empty after stripping, a fallback prefix `X` is used so the result is
+// always a valid exported identifier.
+func exportedFieldName(s string) string {
+	stripped := strings.TrimLeft(s, "_")
+	if stripped == "" {
+		return "X"
+	}
+	return toTitle(stripped)
 }
 
 func assignAliasesToImportPaths(importPackages []*types.Package, currentPkgPath string) map[string]*types.Package {
@@ -445,7 +467,10 @@ func (this *generator) collectMockData() (*MockData, error) {
 	mockData.Imports = this.collectImportsData(imports, len(genRecs) > 0)
 
 	for _, rec := range genRecs {
-		ifaceData := this.collectInterfaceData(rec.name, rec.iface)
+		ifaceData, err := this.collectInterfaceData(rec.name, rec.iface)
+		if err != nil {
+			return nil, err
+		}
 		mockData.Interfaces = append(mockData.Interfaces, ifaceData)
 	}
 
@@ -712,7 +737,7 @@ func (this *generator) getAliasFullName(namedType *types.Alias) string {
 	return this.getFullName(namedType.Obj(), namedType.TypeArgs())
 }
 
-func (this *generator) collectInterfaceData(name string, iface *types.Interface) InterfaceData {
+func (this *generator) collectInterfaceData(name string, iface *types.Interface) (InterfaceData, error) {
 	ifaceData := InterfaceData{
 		Name:     name,
 		MockName: name + structMockSuffix,
@@ -725,7 +750,55 @@ func (this *generator) collectInterfaceData(name string, iface *types.Interface)
 		ifaceData.Methods = append(ifaceData.Methods, methodData)
 	}
 
-	return ifaceData
+	if err := validateNoNameCollisions(name, ifaceData.Methods); err != nil {
+		return InterfaceData{}, err
+	}
+
+	return ifaceData, nil
+}
+
+// validateNoNameCollisions checks that no method on the interface has a name
+// that would collide with a generator-emitted method on the mock. Generated
+// names per source method `X`: X_calls, X_call, X_call_count, X_return,
+// X_return_<each return>. Generated mock-level names: Reset_history.
+//
+// If a collision is detected, returns an error pointing at the offending
+// user-defined method so the user can rename it.
+func validateNoNameCollisions(interfaceName string, methods []MethodData) error {
+	// Build the set of names the generator will emit for OTHER methods.
+	generated := map[string]string{} // generated name -> owning source method
+	generated["Reset_history"] = "<mock-level reset>"
+	for _, m := range methods {
+		generated[m.Name+"_calls"] = m.Name
+		generated[m.Name+"_call"] = m.Name
+		generated[m.Name+"_call_count"] = m.Name
+		if m.ReturnHandler != nil {
+			generated[m.Name+"_return"] = m.Name
+		}
+		for _, r := range m.Getters.ReturnSetters {
+			generated[r.MethodName] = m.Name
+		}
+	}
+	// Each user method must not match one of the generated names except its
+	// own (e.g. method Foo doesn't conflict with its own Foo_calls generator;
+	// only with the generator names of *other* methods).
+	for _, m := range methods {
+		owner, conflicts := generated[m.Name]
+		if !conflicts {
+			continue
+		}
+		if owner == m.Name {
+			// Shouldn't happen — m.Name itself isn't one of the suffixed names.
+			continue
+		}
+		return fmt.Errorf(
+			"interface %s declares method %q which collides with a generator-emitted method "+
+				"(would clash with the accessor for source method %q). "+
+				"Rename %q to avoid the conflict.",
+			interfaceName, m.Name, owner, m.Name,
+		)
+	}
+	return nil
 }
 
 func (this *generator) collectMethodData(method *types.Func, mockName string) MethodData {
@@ -746,7 +819,7 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 		rawFieldName := getParamMember(method, j)
 		suffix := rawFieldName[len(method.Name()+"_param_"):]
 		methodData.CallStructFields = append(methodData.CallStructFields, FieldData{
-			Name: toTitle(suffix),
+			Name: exportedFieldName(suffix),
 			Type: this.getFieldType(param.Type()),
 		})
 	}
@@ -1085,9 +1158,60 @@ func (this *generator) getFieldType(t types.Type) string {
 		return this.getTypeFullName(typ)
 	case *types.Signature:
 		return this.renderSignature(typ)
+	case *types.Struct:
+		return this.renderStruct(typ)
+	case *types.Interface:
+		return this.renderInterface(typ)
 	default:
 		return ""
 	}
+}
+
+// renderStruct renders a *types.Struct as Go source: "struct{}" when empty,
+// otherwise "struct{ Field1 T1; Field2 T2; ... }". Embedded fields and tags
+// are not specially handled — they render as their canonical names and types.
+func (this *generator) renderStruct(s *types.Struct) string {
+	if s.NumFields() == 0 {
+		return "struct{}"
+	}
+	var sb strings.Builder
+	sb.WriteString("struct{ ")
+	for i := range s.NumFields() {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		f := s.Field(i)
+		sb.WriteString(f.Name())
+		sb.WriteByte(' ')
+		sb.WriteString(this.getFieldType(f.Type()))
+	}
+	sb.WriteString(" }")
+	return sb.String()
+}
+
+// renderInterface renders a *types.Interface as Go source: "any" when the
+// interface is empty (no methods, no embedded constraints), otherwise
+// "interface{ Method1(...) ...; ... }".
+func (this *generator) renderInterface(iface *types.Interface) string {
+	if iface.Empty() {
+		return "any"
+	}
+	var sb strings.Builder
+	sb.WriteString("interface{ ")
+	for i := range iface.NumMethods() {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		m := iface.Method(i)
+		sb.WriteString(m.Name())
+		// m.Type() is a *types.Signature; renderSignature emits "func(...)..."
+		// but for interface methods we want "Name(...) ..." (no "func").
+		// Drop the leading "func" prefix.
+		sig := this.renderSignature(m.Type().(*types.Signature))
+		sb.WriteString(sig[len("func"):])
+	}
+	sb.WriteString(" }")
+	return sb.String()
 }
 
 // renderSignature renders a *types.Signature as Go source: e.g.
