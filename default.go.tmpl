@@ -134,17 +134,29 @@ type {{$method.ReturnType}} struct {
 {{end}}}
 
 {{if $method.StubType}}// {{$method.StubType}} holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback.
+// Once() queue entries, and Always() fallback. Queue entries and
+// conditional Always slots are referenced through pointers so per-slot
+// setters held across subsequent armings remain valid.
 type {{$method.StubType}} struct {
 {{range $method.CfgReturnFields}}	{{.Name}} {{.Type}}
 {{end}}}
 
+// {{$method.ConditionalType}} is per-method conditional state — one entry
+// per When() registration. The outer slice holds *Conditional (rather than
+// values) so the conditional's own fields stay at a stable address across
+// subsequent When() registrations.
+type {{$method.ConditionalType}} struct {
+	pred       func({{$method.ParamType}}) bool
+	stubQueue  []*{{$method.StubType}}
+	alwaysStub *{{$method.StubType}}
+}
+
 {{end}}type {{$method.CfgType}} struct {
 	sticky    {{if $method.StubType}}{{$method.StubType}}{{else}}struct{}{{end}}
 	stickySet bool
-{{if $method.StubType}}	stubQueue  []{{$method.StubType}}
-	alwaysStub {{$method.StubType}}
-	alwaysSet  bool
+{{if $method.StubType}}	stubQueue    []*{{$method.StubType}}
+	alwaysStub   *{{$method.StubType}}
+	conditionals []*{{$method.ConditionalType}}
 {{end}}{{if $method.HandlerFieldName}}	handlerSet bool
 
 	handler {{$method.HandlerType}}
@@ -171,20 +183,54 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 {{- if $method.ReturnFields}}
 {{- if $.Options.Async}}
 	this.mu.Lock()
-{{end}}	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
+{{end}}	__mockParam := {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} }
+	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
 		Index: len(this.{{$method.LogField}}),
-		Param: {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
+		Param: __mockParam,
 	})
 	__mockCallIdx := len(this.{{$method.LogField}}) - 1
 	__mockHandler := this.{{$method.CfgField}}.{{$method.HandlerFieldName}}
 	var __mockSource {{$method.StubType}}
-	if len(this.{{$method.CfgField}}.stubQueue) > 0 {
-		__mockSource = this.{{$method.CfgField}}.stubQueue[0]
-		this.{{$method.CfgField}}.stubQueue = this.{{$method.CfgField}}.stubQueue[1:]
-	} else if this.{{$method.CfgField}}.alwaysSet {
-		__mockSource = this.{{$method.CfgField}}.alwaysStub
-	} else {
-		__mockSource = this.{{$method.CfgField}}.sticky
+	__mockMatched := false
+	if len(this.{{$method.CfgField}}.conditionals) > 0 {
+		__mockFirstMatch := -1
+		__mockSecondMatch := -1
+		__mockMatchCount := 0
+		for __mockIdx := range this.{{$method.CfgField}}.conditionals {
+			if this.{{$method.CfgField}}.conditionals[__mockIdx].pred(__mockParam) {
+				__mockMatchCount++
+				if __mockFirstMatch == -1 {
+					__mockFirstMatch = __mockIdx
+				} else if __mockSecondMatch == -1 {
+					__mockSecondMatch = __mockIdx
+				}
+			}
+		}
+		if __mockMatchCount >= 2 {
+			{{- if $.Options.Async}}this.mu.Unlock()
+			{{end}}panic("{{$iface.MockName}}.{{$method.Name}}: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
+		}
+		if __mockMatchCount == 1 && __mockHandler == nil {
+			__mockCond := this.{{$method.CfgField}}.conditionals[__mockFirstMatch]
+			if len(__mockCond.stubQueue) > 0 {
+				__mockSource = *__mockCond.stubQueue[0]
+				__mockCond.stubQueue = __mockCond.stubQueue[1:]
+				__mockMatched = true
+			} else if __mockCond.alwaysStub != nil {
+				__mockSource = *__mockCond.alwaysStub
+				__mockMatched = true
+			}
+		}
+	}
+	if !__mockMatched && __mockHandler == nil {
+		if len(this.{{$method.CfgField}}.stubQueue) > 0 {
+			__mockSource = *this.{{$method.CfgField}}.stubQueue[0]
+			this.{{$method.CfgField}}.stubQueue = this.{{$method.CfgField}}.stubQueue[1:]
+		} else if this.{{$method.CfgField}}.alwaysStub != nil {
+			__mockSource = *this.{{$method.CfgField}}.alwaysStub
+		} else {
+			__mockSource = this.{{$method.CfgField}}.sticky
+		}
 	}
 {{range $i, $rf := $method.CfgReturnFields}}	__mockR{{$i}} := __mockSource.{{$rf.Name}}
 {{end}}{{- if $.Options.Async}}	this.mu.Unlock()
@@ -197,7 +243,9 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 	}
 
 {{if $.Options.Async}}	this.mu.Lock()
-{{end}}	this.{{$method.LogField}}[__mockCallIdx].Return = {{$method.ReturnType}}{ {{- range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}{{$rf.Name}}: __mockRet{{$i}}{{end}} }
+{{end}}	if __mockCallIdx < len(this.{{$method.LogField}}) {
+		this.{{$method.LogField}}[__mockCallIdx].Return = {{$method.ReturnType}}{ {{- range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}{{$rf.Name}}: __mockRet{{$i}}{{end}} }
+	}
 {{- if $.Options.Async}}
 	this.mu.Unlock()
 {{end}}
@@ -245,7 +293,15 @@ func (this {{$iface.InspectType}}) Reset() {
 		mu:          &this.m.mu,
 		indexGetter: func(c {{$method.CallType}}) int { return c.Index },
 {{end}}		log:       &this.m.{{$method.LogField}},
-		pendingFn: func() int { {{if $method.StubType}}return len(this.m.{{$method.CfgField}}.stubQueue){{else}}return 0{{end}} },
+		pendingFn: func() int {
+			{{if $method.StubType -}}
+			n := len(this.m.{{$method.CfgField}}.stubQueue)
+			for __mockI := range this.m.{{$method.CfgField}}.conditionals {
+				n += len(this.m.{{$method.CfgField}}.conditionals[__mockI].stubQueue)
+			}
+			return n
+			{{- else}}return 0{{end}}
+		},
 		indexer:   this.m.callIndex,
 	}}
 }
@@ -259,6 +315,9 @@ func (this {{$iface.InspectType}}) PendingStubs() int {
 	defer this.m.mu.Unlock()
 {{end}}	n := 0
 {{range $method := $iface.Methods}}{{if $method.StubType}}	n += len(this.m.{{$method.CfgField}}.stubQueue)
+	for __mockI := range this.m.{{$method.CfgField}}.conditionals {
+		n += len(this.m.{{$method.CfgField}}.conditionals[__mockI].stubQueue)
+	}
 {{end}}{{end}}	return n
 }
 
@@ -269,20 +328,28 @@ type {{$iface.MockName}}VerifyT interface {
 }
 
 // Verify calls t.Errorf if any method has unconsumed Once() stub entries.
-// It does not call t.Fatal so other teardown checks still run.
+// It does not call t.Fatal so other teardown checks still run. The mock
+// mutex is released before t.Errorf is invoked, so a user-supplied T
+// implementation can safely call back into the mock without deadlocking.
 func (this {{$iface.InspectType}}) Verify(t {{$iface.MockName}}VerifyT) {
 	t.Helper()
 {{if $.Options.Async}}	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
 {{end}}	total, breakdown := 0, ""
-{{range $method := $iface.Methods}}{{if $method.StubType}}	if n := len(this.m.{{$method.CfgField}}.stubQueue); n > 0 {
-		total += n
-		if breakdown != "" {
-			breakdown += ", "
+{{range $method := $iface.Methods}}{{if $method.StubType}}	{
+		n := len(this.m.{{$method.CfgField}}.stubQueue)
+		for __mockI := range this.m.{{$method.CfgField}}.conditionals {
+			n += len(this.m.{{$method.CfgField}}.conditionals[__mockI].stubQueue)
 		}
-		breakdown += "{{$method.Name}}: " + strconv.Itoa(n)
+		if n > 0 {
+			total += n
+			if breakdown != "" {
+				breakdown += ", "
+			}
+			breakdown += "{{$method.Name}}: " + strconv.Itoa(n)
+		}
 	}
-{{end}}{{end}}	if total > 0 {
+{{end}}{{end}}{{if $.Options.Async}}	this.m.mu.Unlock()
+{{end}}	if total > 0 {
 		t.Errorf("{{$iface.MockName}}: " + strconv.Itoa(total) + " unconsumed stubs (" + breakdown + ")")
 	}
 }
@@ -325,8 +392,8 @@ func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.alwaysSet || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
-		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+{{end}}	if this.m.{{$method.CfgField}}.alwaysStub != nil || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
+		panic("{{$iface.MockName}}.{{$method.Name}}: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
 	}
 	this.m.{{$method.CfgField}}.stickySet = true
 {{range $method.CfgReturnFields}}	this.m.{{$method.CfgField}}.sticky.{{.Name}} = {{.Name}}
@@ -339,8 +406,8 @@ func (this {{$method.ConfigMethodType}}) Return() {{$method.PerReturnSetterType}
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.alwaysSet || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
-		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+{{end}}	if this.m.{{$method.CfgField}}.alwaysStub != nil || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
+		panic("{{$iface.MockName}}.{{$method.Name}}: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
 	}
 	this.m.{{$method.CfgField}}.stickySet = true
 	return {{$method.PerReturnSetterType}}{m: this.m, target: &this.m.{{$method.CfgField}}.sticky}
@@ -352,8 +419,8 @@ func (this {{$method.ConfigMethodType}}) {{$method.CustomReturnSetterName}}(valu
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.alwaysSet || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
-		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+{{end}}	if this.m.{{$method.CfgField}}.alwaysStub != nil || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
+		panic("{{$iface.MockName}}.{{$method.Name}}: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
 	}
 	this.m.{{$method.CfgField}}.handlerSet = true
 	this.m.{{$method.CfgField}}.{{$method.HandlerFieldName}} = value
@@ -366,10 +433,11 @@ func (this {{$method.ConfigMethodType}}) Once() {{$method.PerReturnSetterType}} 
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	if this.m.{{$method.CfgField}}.stickySet || this.m.{{$method.CfgField}}.handlerSet {
-		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+		panic("{{$iface.MockName}}.{{$method.Name}}: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
 	}
-	this.m.{{$method.CfgField}}.stubQueue = append(this.m.{{$method.CfgField}}.stubQueue, {{$method.StubType}}{})
-	return {{$method.PerReturnSetterType}}{m: this.m, target: &this.m.{{$method.CfgField}}.stubQueue[len(this.m.{{$method.CfgField}}.stubQueue)-1]}
+	__mockStub := &{{$method.StubType}}{}
+	this.m.{{$method.CfgField}}.stubQueue = append(this.m.{{$method.CfgField}}.stubQueue, __mockStub)
+	return {{$method.PerReturnSetterType}}{m: this.m, target: __mockStub}
 }
 
 // Always arms a fallback return used when the Once() queue is exhausted.
@@ -379,11 +447,24 @@ func (this {{$method.ConfigMethodType}}) Always() {{$method.PerReturnSetterType}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 {{end}}	if this.m.{{$method.CfgField}}.stickySet || this.m.{{$method.CfgField}}.handlerSet {
-		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+		panic("{{$iface.MockName}}.{{$method.Name}}: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
 	}
-	this.m.{{$method.CfgField}}.alwaysSet = true
-	this.m.{{$method.CfgField}}.alwaysStub = {{$method.StubType}}{}
-	return {{$method.PerReturnSetterType}}{m: this.m, target: &this.m.{{$method.CfgField}}.alwaysStub}
+	this.m.{{$method.CfgField}}.alwaysStub = &{{$method.StubType}}{}
+	return {{$method.PerReturnSetterType}}{m: this.m, target: this.m.{{$method.CfgField}}.alwaysStub}
+}
+
+{{end}}{{if $method.ReturnFields}}// When registers a conditional stub set whose entries fire only when
+// the call's Param satisfies the predicate. Use Once()/Always() on the
+// returned namespace to attach armings.
+func (this {{$method.ConfigMethodType}}) When(pred func({{$method.ParamType}}) bool) {{$method.OnConditionalType}} {
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	this.m.{{$method.CfgField}}.conditionals = append(
+		this.m.{{$method.CfgField}}.conditionals,
+		&{{$method.ConditionalType}}{pred: pred},
+	)
+	return {{$method.OnConditionalType}}{m: this.m, condIndex: len(this.m.{{$method.CfgField}}.conditionals) - 1}
 }
 
 {{end}}// Reset clears configured returns and installed handler for {{$method.Name}}.
@@ -417,7 +498,45 @@ func (this {{$method.PerReturnSetterType}}) {{.MethodName}}(value {{.ParamType}}
 	return this
 }
 
-{{end}}{{end}}{{end}}{{/* end range setters / if ReturnFields / range $method */}}{{/* ===== callIndex helper (per mock) ===== */}}
+{{end}}// {{$method.OnConditionalType}} is the conditional namespace returned by When(pred).
+// Exposes Once() (queue a single-shot stub) and Always() (install/replace
+// the fallback stub) — both scoped to the matching predicate.
+type {{$method.OnConditionalType}} struct {
+	m         *{{$iface.MockName}}
+	condIndex int
+}
+
+// Once arms a single-call return that fires only when this conditional's
+// predicate matches.
+func (this {{$method.OnConditionalType}}) Once() {{$method.PerReturnSetterType}} {
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	if this.condIndex >= len(this.m.{{$method.CfgField}}.conditionals) {
+		panic("{{$iface.MockName}}.{{$method.Name}}: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
+	}
+	cond := this.m.{{$method.CfgField}}.conditionals[this.condIndex]
+	__mockStub := &{{$method.StubType}}{}
+	cond.stubQueue = append(cond.stubQueue, __mockStub)
+	return {{$method.PerReturnSetterType}}{m: this.m, target: __mockStub}
+}
+
+// Always arms a fallback return that fires on every call matching this
+// conditional's predicate, used when the conditional's Once() queue is
+// exhausted.
+func (this {{$method.OnConditionalType}}) Always() {{$method.PerReturnSetterType}} {
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	if this.condIndex >= len(this.m.{{$method.CfgField}}.conditionals) {
+		panic("{{$iface.MockName}}.{{$method.Name}}: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
+	}
+	cond := this.m.{{$method.CfgField}}.conditionals[this.condIndex]
+	cond.alwaysStub = &{{$method.StubType}}{}
+	return {{$method.PerReturnSetterType}}{m: this.m, target: cond.alwaysStub}
+}
+
+{{end}}{{end}}{{/* end if ReturnFields / range $method */}}{{/* ===== callIndex helper (per mock) ===== */}}
 // callIndex resolves the index argument of Method_call(i)-style indexers:
 // negative i counts from the end; out-of-range i panics with a message
 // that surfaces both the original input and the log length.

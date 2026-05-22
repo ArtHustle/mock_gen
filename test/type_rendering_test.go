@@ -538,6 +538,15 @@ type Service interface {
 		// The stub type itself must not be declared.
 		Expect(out).NotTo(ContainSubstring("serviceMockTickStub"),
 			"stub struct must not be declared for a method with no returns")
+		// When() must not be emitted for a method with no returns —
+		// there's nothing to conditionalize.
+		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickOn) When("),
+			"When() must not be emitted for a method with no returns")
+		// The conditional struct and conditional namespace must not be declared.
+		Expect(out).NotTo(ContainSubstring("serviceMockTickConditional"),
+			"conditional struct must not be declared for a method with no returns")
+		Expect(out).NotTo(ContainSubstring("serviceMockTickOnWhen"),
+			"conditional namespace must not be declared for a method with no returns")
 	})
 
 	It("a single-return method emits ReturnAll, Return().<Name>, and ReturnCustom (no arity-1 special case)", func() {
@@ -555,6 +564,13 @@ type Service interface {
 		// Once() and Always() must be emitted, both returning the per-return setter.
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Once() serviceMockGreetReturn"))
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Always() serviceMockGreetReturn"))
+		// When() must be emitted with a predicate typed over the method's ParamType,
+		// returning the conditional namespace.
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) When(pred func(ServiceMockGreetParam) bool) serviceMockGreetOnWhen"))
+		// The conditional namespace exposes Once() and Always(), both returning
+		// the per-return setter (same shape as the unconditional pair).
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOnWhen) Once() serviceMockGreetReturn"))
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOnWhen) Always() serviceMockGreetReturn"))
 	})
 
 	It("non-empty inline interface renders methods inline", func() {

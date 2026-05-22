@@ -52,6 +52,7 @@ type Service interface {
 // MockName: {{.MockName}}
 // Inspect entry: {{.InspectEntryName}} -> type {{.InspectType}}
 // Config entry: {{.ConfigEntryName}} -> type {{.ConfigType}}
+// CallsHelper: {{.CallsHelperType}}
 // Methods: {{len .Methods}}
 {{end}}
 type Stub struct{}
@@ -62,6 +63,7 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring("// MockName: ServiceMock"))
 		Expect(out).To(ContainSubstring("// Inspect entry: Calls -> type serviceMockCalls"))
 		Expect(out).To(ContainSubstring("// Config entry: On -> type serviceMockOn"))
+		Expect(out).To(ContainSubstring("// CallsHelper: serviceMockCallsHelper"))
 		Expect(out).To(ContainSubstring("// Methods: 1"))
 	})
 
@@ -115,6 +117,8 @@ type Service interface {
 // StubType: {{.StubType}}
 // OnceType: {{.OnceType}}
 // AlwaysType: {{.AlwaysType}}
+// ConditionalType: {{.ConditionalType}}
+// OnConditionalType: {{.OnConditionalType}}
 {{range .IndividualReturnSetters}}// Setter: {{.MethodName}}({{.ParamType}}) -> {{.FieldName}}
 {{end}}{{end}}{{end}}
 type Stub struct{}
@@ -140,11 +144,13 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring("// StubType: serviceMockSendStub"))
 		Expect(out).To(ContainSubstring("// OnceType: serviceMockSendOnce"))
 		Expect(out).To(ContainSubstring("// AlwaysType: serviceMockSendAlways"))
+		Expect(out).To(ContainSubstring("// ConditionalType: serviceMockSendConditional"))
+		Expect(out).To(ContainSubstring("// OnConditionalType: serviceMockSendOnWhen"))
 		Expect(out).To(ContainSubstring("// Setter: Id(string) -> id"))
 		Expect(out).To(ContainSubstring("// Setter: Err(error) -> err"))
 	})
 
-	It("methods with no returns have no HandlerFieldName, no ReturnsSetterName, no CustomReturnSetterName, no PerReturnSetterType, no IndividualReturnSetters, no StubType/OnceType/AlwaysType", func() {
+	It("methods with no returns have no HandlerFieldName, no ReturnsSetterName, no CustomReturnSetterName, no PerReturnSetterType, no IndividualReturnSetters, no StubType/OnceType/AlwaysType, no ConditionalType/OnConditionalType", func() {
 		input := `package pkg
 
 type Service interface {
@@ -160,6 +166,8 @@ type Service interface {
 // stub-type={{.StubType | printf "%q"}}
 // once-type={{.OnceType | printf "%q"}}
 // always-type={{.AlwaysType | printf "%q"}}
+// conditional-type={{.ConditionalType | printf "%q"}}
+// on-conditional-type={{.OnConditionalType | printf "%q"}}
 {{end}}{{end}}
 type Stub struct{}
 `
@@ -173,6 +181,8 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring(`// stub-type=""`))
 		Expect(out).To(ContainSubstring(`// once-type=""`))
 		Expect(out).To(ContainSubstring(`// always-type=""`))
+		Expect(out).To(ContainSubstring(`// conditional-type=""`))
+		Expect(out).To(ContainSubstring(`// on-conditional-type=""`))
 	})
 
 	// --- access to SignatureData ---

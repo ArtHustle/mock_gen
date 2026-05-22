@@ -407,6 +407,16 @@ type MethodData struct {
 	// AlwaysType is the per-method namespace returned by Always()
 	// (e.g. "serviceMockSendAlways"). Single method: Return(). Empty when no returns.
 	AlwaysType string
+	// ConditionalType is the unexported per-method conditional struct
+	// type name (e.g. "serviceMockSendConditional"). Each When(pred) call
+	// appends one to the cfg's `conditionals` slice. Empty when the method
+	// has no returns.
+	ConditionalType string
+	// OnConditionalType is the unexported per-method conditional namespace
+	// type returned by When(pred) on the per-method config object
+	// (e.g. "serviceMockSendOnWhen"). Exposes Once() and Always(). Empty
+	// when the method has no returns.
+	OnConditionalType string
 }
 
 // FieldData is a generic `Name Type` pair used for struct fields.
@@ -936,6 +946,8 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 		methodData.StubType = unexportedTypeName(mockName + method.Name() + "Stub")
 		methodData.OnceType = unexportedTypeName(mockName + method.Name() + "Once")
 		methodData.AlwaysType = unexportedTypeName(mockName + method.Name() + "Always")
+		methodData.ConditionalType = unexportedTypeName(mockName + method.Name() + "Conditional")
+		methodData.OnConditionalType = unexportedTypeName(mockName + method.Name() + "OnWhen")
 		for i, rf := range methodData.ReturnFields {
 			methodData.IndividualReturnSetters = append(
 				methodData.IndividualReturnSetters,

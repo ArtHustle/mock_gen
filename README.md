@@ -107,7 +107,7 @@ Each `Call` has `Param` and `Return` sub-fields containing the recorded args (in
 
 `mock.Calls().Reset()` clears every method's log at once, without touching configured returns or handlers.
 
-`mock.Calls().PendingStubs()` sums unconsumed `Once` entries across all methods.
+`mock.Calls().PendingStubs()` sums unconsumed `Once` entries across all methods — both unconditional and `When`-conditional.
 
 `mock.Calls().Verify(t)` calls `t.Helper()` and, if any method has unconsumed stubs, calls `t.Errorf` with a per-method breakdown (e.g. `"ServiceMock: 2 unconsumed stubs (Get: 2)"`). It does not call `t.Fatal`, so other teardown checks still run. This is part of the stable contract.
 
@@ -120,7 +120,8 @@ Each `Call` has `Param` and `Return` sub-fields containing the recorded args (in
 - **`ReturnCustom(func(...))`** — install a dynamic function called instead of returning the static values.
 - **`Once().Return().X(value)`** — queue a single-shot return. Each `Once()` appends one entry to the per-method FIFO queue. Calls consume the queue head first.
 - **`Always().Return().X(value)`** — install (or replace) a fallback return used after the queue is exhausted. Multiple `Always()` calls are allowed; the last one wins.
-- **`Reset()`** — clears `ReturnAll`-set values, `Return()`-set values, the `ReturnCustom` handler, the `Once` queue, and the `Always` fallback for this method.
+- **`When(func(<ParamType>) bool)`** — register a conditional arming fired only on calls whose Param satisfies the predicate. The returned namespace exposes `Once()` and `Always()`. See [Argument matchers](#argument-matchers).
+- **`Reset()`** — clears `ReturnAll`-set values, `Return()`-set values, the `ReturnCustom` handler, the `Once` queue, the `Always` fallback, and any `When` conditionals for this method.
 
 `mock.On().Reset()` clears every method's config at once, without touching the call logs.
 
@@ -145,9 +146,54 @@ m.On().GetProductByID().Always().Return().Product(defaultProduct).Err(nil)
 
 **Rules:**
 - `Once()` and `Always()` may be mixed freely — add any number of `Once()` entries and any number of `Always()` replacements in any order.
-- Mixing the sticky path (`Return()`, `ReturnAll`, `ReturnCustom`) with the queued path (`Once`, `Always`) **panics** with a descriptive message. Call `Reset()` first if you need to switch modes mid-test.
+- Mixing the sticky path (`Return()`, `ReturnAll`, `ReturnCustom`) with the queued path (`Once`, `Always`) **panics** with a direction-specific message — `"cannot set sticky return while Once()/Always() entries are armed"` or `"cannot arm Once()/Always() while a sticky return is set"`. Call `Reset()` first if you need to switch modes mid-test.
 - `Always()` does **not** count as a pending stub — it is a fallback, not a single-shot entry.
 - Per-slot setters chain: `Once().Return().X(a).Y(b).Err(nil)` sets all three slots in one statement. Last write within a single entry wins.
+
+## Argument matchers
+
+For tests that want different returns depending on the call's arguments, `When(pred)` arms a conditional stub set:
+
+```go
+// VIP user gets a specific id; default fallback for everyone else.
+m.On().Send().
+    When(func(p ServiceMockSendParam) bool { return p.Email == "vip@example.com" }).
+    Once().Return().Id("vip-id").Err(nil)
+
+m.On().Send().Always().Return().Id("default").Err(nil)
+```
+
+The predicate is typed over the per-method `Param` struct (`ServiceMockSendParam` above), so refactors to the source interface surface as compile errors rather than runtime mismatches.
+
+The namespace returned by `When(pred)` exposes exactly two methods:
+
+- **`Once()`** — append a single-shot stub to this conditional's queue.
+- **`Always()`** — install (or replace) a fallback stub for this conditional.
+
+There is no conditional `Return()` / `ReturnAll()` / `ReturnCustom()`. A "conditional sticky" is just `When(p).Always()`; a "conditional handler" is expressible via an unconditional `ReturnCustom` whose body switches on the param.
+
+**Multiple armings on one predicate** — capture the namespace in a local var:
+
+```go
+cond := m.On().Send().When(func(p ServiceMockSendParam) bool { return p.Email == "ratelimited@example.com" })
+cond.Once().Return().Err(rateLimitedErr) // first call
+cond.Always().Return().Id("ok").Err(nil) // subsequent matching calls
+```
+
+**Dispatch order per call:**
+
+1. Walk this method's `When` conditionals in registration order. Collect all matching indices.
+2. If **two or more match**, panic with a message naming the mock, method, and the indices of the first two matching predicates — e.g. `ServiceMock.Send: call matched 2 When predicates (indices 0 and 1); refine the predicates or remove the overlap`.
+3. If **exactly one matches**, dispatch into that conditional's queue, then its `Always` fallback. If both are empty (the conditional matched but is exhausted), fall through to step 4.
+4. Otherwise, use the unconditional path (queue → `Always` → sticky → zero values), as documented in [Sequenced stubs](#sequenced-stubs).
+5. If `ReturnCustom` is installed on the unconditional path, the handler wins over the static-stub source from any of the above steps. `ReturnCustom` does not exist on conditionals.
+
+**Rules:**
+
+- Conditional and unconditional registrations may coexist on the same method. `When(...)` is for special cases; unconditional `Once`/`Always`/`Return` is for the default. No panic at registration; only at call time if two predicates overlap.
+- Conditional `Once` entries count toward `PendingStubs()` and the `Verify(t)` breakdown.
+- `m.On().<Method>().Reset()` drains conditionals along with the unconditional cfg. `m.Reset()` does the same for every method.
+- Predicate evaluation under `--async` runs inside the existing snapshot lock — no new lock boundaries, no extra contention.
 
 ## Verification at teardown
 
@@ -198,6 +244,7 @@ With `--async`, the mock is safe to use from goroutines:
 
 - A `sync.Mutex` guards all generated state. The exported API is identical with or without `--async` — flipping it on only adds internal locking and the WaitFor* methods below.
 - Methods with returns use the snapshot pattern: lock, append the call + snapshot config, unlock, run handler / fall back to static returns, lock, write the `Return` back into the recorded entry, unlock. The lock is never held while user code (handler) runs.
+- **Arming should not race with consumption.** Configure all `On()` chains before launching the system under test. Each per-slot setter (`Return().X(v)`) takes the mutex independently, so a chain like `Once().Return().X(a).Y(b)` is not atomic w.r.t. a goroutine simultaneously *consuming* the queue — a partially-armed entry can be dispatched. Setting up stubs from a single goroutine before invocation begins avoids this entirely.
 - Every per-method `Calls()` namespace gains two waiters for asserting on calls made by background goroutines:
 
 ```go
@@ -335,6 +382,13 @@ content, err := mock_gen.GenerateMockContentWithOptions(sourceCode, mock_gen.Opt
 ```
 
 ## Versioning
+
+v0.13.0 adds typed-predicate argument matchers via `When(pred)`. **Additive, backward-compatible.**
+
+- **No breaking changes.** All v0.12 code keeps working without modification.
+- **New API**: `When(func(<ParamType>) bool)` on the per-method config namespace. The returned conditional namespace exposes `Once()` and `Always()`. See [Argument matchers](#argument-matchers).
+- **One new runtime panic** (unreachable by v0.12 code): if two `When` predicates both match the same incoming call, the call panics with a message naming the mock, method, and the indices of the colliding predicates. Refine the predicates or remove the overlap to recover.
+- **Custom-template authors**: two new `MethodData` fields — `ConditionalType` and `OnConditionalType` — are populated for methods with return values and empty otherwise. `ConditionalType` is the per-method conditional struct (e.g. `serviceMockSendConditional`) and `OnConditionalType` is the conditional namespace returned by `When(pred)` (e.g. `serviceMockSendOnWhen`). Authors of templates that copy `DefaultTemplate()` get the new code automatically; authors of from-scratch templates can ignore it (they own their own emission).
 
 v0.12.0 adds sequenced stubs and teardown verification. **Additive, backward-compatible.**
 

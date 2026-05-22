@@ -12,6 +12,21 @@ import (
 // (Returns/ReturnAll/ReturnCustom) lives in behavior_test.go.
 var _ = Describe("Sequenced stubs", func() {
 
+	It("Virgin mock (no On() call at all) returns zero values", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Get() (id string, err error)
+}`, `
+m := &ServiceMock{}
+
+id, err := m.Get()
+if id != "" || err != nil {
+	t.Fatalf("virgin mock: Get() = (%q, %v), want (\"\", nil) — zero values fallthrough", id, err)
+}
+`, Options{})
+	})
+
 	It("Once() arms a single-call return; second call falls back to zero values", func() {
 		runMockBehavior(`package svc
 
@@ -48,6 +63,31 @@ for i, want := range []string{"a", "b", "c"} {
 	got, err := m.Get()
 	if got != want || err != nil {
 		t.Fatalf("call %d: Get() = (%q, %v), want (%q, nil)", i, got, err, want)
+	}
+}
+`, Options{})
+	})
+
+	It("Setter captured across statements writes into the right queue entry even after later Once() armings", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Get() (id string, err error)
+}`, `
+m := &ServiceMock{}
+// Capture the first setter, then arm more entries (forcing the stubQueue
+// slice's backing array to grow). The captured setter must still write
+// into the live first entry, not into an orphaned old backing array.
+s1 := m.On().Get().Once()
+m.On().Get().Once().Return().Id("b").Err(nil)
+m.On().Get().Once().Return().Id("c").Err(nil)
+m.On().Get().Once().Return().Id("d").Err(nil)
+s1.Return().Id("a").Err(nil)
+
+for i, want := range []string{"a", "b", "c", "d"} {
+	got, _ := m.Get()
+	if got != want {
+		t.Fatalf("call %d: Get() = %q, want %q (cross-statement setter must reach live entry)", i, got, want)
 	}
 }
 `, Options{})
@@ -268,6 +308,43 @@ if !found {
 `, Options{}, `import fmtPkg "fmt"`, `import stringsPkg "strings"`, `var fmtSprintf = fmtPkg.Sprintf`)
 	})
 
+	It("--async: Verify(t) Errorf can call back into the mock without deadlocking", func() {
+		// mockT.Errorf below calls back into the mock — Verify must release the
+		// mock mutex before invoking Errorf or this test deadlocks.
+		runMockBehavior(`package svc
+
+type Service interface {
+	Get() (id string, err error)
+}`, `
+type mockT struct {
+	m       *ServiceMock
+	pending int
+}
+func (mt *mockT) Helper() {}
+func (mt *mockT) Errorf(format string, args ...any) {
+	mt.pending = mt.m.Calls().PendingStubs()
+}
+
+m := &ServiceMock{}
+m.On().Get().Once().Return().Id("x").Err(nil)
+
+mt := &mockT{m: m}
+done := make(chan struct{})
+go func() {
+	m.Calls().Verify(mt)
+	close(done)
+}()
+select {
+case <-done:
+case <-timePkg.After(2 * timePkg.Second):
+	t.Fatal("deadlock: Verify did not return within 2s — Errorf is being called under the mock lock")
+}
+if mt.pending != 1 {
+	t.Fatalf("Errorf saw PendingStubs() = %d, want 1", mt.pending)
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
 	It("Reset() (mock-level) clears queue and always; subsequent call returns zero values", func() {
 		runMockBehavior(`package svc
 
@@ -337,7 +414,7 @@ if got := m.Calls().Close().PendingStubs(); got != 1 {
 `, Options{})
 	})
 
-	It("Mixing panic: sticky-then-Once panics", func() {
+	It("Mixing panic: sticky-then-Once panics with a queue-direction message", func() {
 		runMockBehavior(`package svc
 
 type Service interface {
@@ -351,12 +428,21 @@ defer func() {
 	if r == nil {
 		t.Fatal("expected panic when adding Once() after sticky stub")
 	}
+	msg, _ := r.(string)
+	// Direction is "armings being added on top of sticky"; message must
+	// name the Once/Always side as the offender, not the (non-existent) queue.
+	if !stringsPkg.Contains(msg, "cannot arm Once()/Always() while a sticky return is set") {
+		t.Fatalf("panic message %q is missing the queue-direction phrasing", msg)
+	}
+	if !stringsPkg.Contains(msg, "ServiceMock.Get") {
+		t.Fatalf("panic message %q missing mock/method prefix", msg)
+	}
 }()
 m.On().Get().Once().Return().Id("once")
-`, Options{})
+`, Options{}, `import stringsPkg "strings"`)
 	})
 
-	It("Mixing panic: Once-then-sticky panics", func() {
+	It("Mixing panic: Once-then-sticky panics with a sticky-direction message", func() {
 		runMockBehavior(`package svc
 
 type Service interface {
@@ -370,9 +456,15 @@ defer func() {
 	if r == nil {
 		t.Fatal("expected panic when calling sticky Return() after Once()")
 	}
+	msg, _ := r.(string)
+	// Direction is "sticky being added on top of armings"; message must
+	// name the sticky side as the offender, not the queue.
+	if !stringsPkg.Contains(msg, "cannot set sticky return while Once()/Always() entries are armed") {
+		t.Fatalf("panic message %q is missing the sticky-direction phrasing", msg)
+	}
 }()
 m.On().Get().Return().Id("sticky")
-`, Options{})
+`, Options{}, `import stringsPkg "strings"`)
 	})
 
 	It("Mixing panic: Once-then-ReturnAll panics", func() {
@@ -497,6 +589,45 @@ for i, v := range values {
 	}
 }
 `, Options{Async: true}, `import syncPkg "sync"`, `import timePkg "time"`, `import sortPkg "sort"`)
+	})
+
+	It("--async: Reset() racing with in-flight calls does not panic the generated code", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(input int) (value int, err error)
+}`, `
+m := &ServiceMock{}
+m.On().Send().Always().Return().Value(7).Err(nil)
+
+const N = 200
+var wg syncPkg.WaitGroup
+for i := 0; i < N; i++ {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m.Send(0)
+	}()
+}
+// Reset interleaved with calls — exercises the write-back guard against
+// log being nil-ed between the snapshot unlock and the return-write relock.
+for i := 0; i < 20; i++ {
+	go m.Reset()
+}
+
+done := make(chan struct{})
+go func() {
+	wg.Wait()
+	close(done)
+}()
+select {
+case <-done:
+case <-timePkg.After(5 * timePkg.Second):
+	t.Fatal("timed out waiting for goroutines")
+}
+// If we reach here without a panic, the guard works. We do not assert
+// on the recorded log because Reset may have cleared it mid-run.
+`, Options{Async: true}, `import syncPkg "sync"`, `import timePkg "time"`)
 	})
 
 	It("Mixing panic: Always-then-ReturnAll panics", func() {
