@@ -488,7 +488,7 @@ type Service interface {
 		Expect(out).NotTo(ContainSubstring(`"errors"`))
 	})
 
-	It("WaitForCount and WaitForCall ARE emitted with --async, on every Calls() namespace", func() {
+	It("WaitForCount and WaitForCall ARE emitted with --async, on the shared generic helper", func() {
 		out, err := GenerateMockContentWithOptions(`package pkg
 
 type Service interface {
@@ -496,13 +496,17 @@ type Service interface {
 	Close() error
 }`, Options{Async: true})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("func (this serviceMockSendCalls) WaitForCount(n int, timeout time.Duration) error"))
-		Expect(out).To(ContainSubstring("func (this serviceMockSendCalls) WaitForCall(predicate func(ServiceMockSendCall) bool, timeout time.Duration) error"))
-		Expect(out).To(ContainSubstring("func (this serviceMockCloseCalls) WaitForCount("))
-		Expect(out).To(ContainSubstring("func (this serviceMockCloseCalls) WaitForCall("))
+		// With the generic helper refactor, WaitForCount/WaitForCall live on
+		// serviceMockCallsHelper[CT] (per-mock name) and are promoted to each
+		// per-method Calls type.
+		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) WaitForCount(n int, timeout time.Duration) error"))
+		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) WaitForCall(predicate func(CT) bool, timeout time.Duration) error"))
+		// Verify each method's Calls type embeds the helper (and thus has the methods promoted).
+		Expect(out).To(ContainSubstring("type serviceMockSendCalls struct {"))
+		Expect(out).To(ContainSubstring("type serviceMockCloseCalls struct {"))
 	})
 
-	// --- per-method config setter emission (v0.11) ---
+	// --- per-method config setter emission ---
 
 	It("a method with no returns gets only Reset on its config object (no ReturnAll/Return/ReturnCustom)", func() {
 		out, err := GenerateMockContentWithOptions(`package pkg
@@ -522,6 +526,18 @@ type Service interface {
 			"the per-return setter type must not be declared for a method with no returns")
 		// Reset still exists on the per-method config object.
 		Expect(out).To(ContainSubstring("func (this serviceMockTickOn) Reset()"))
+		// Once(), Always(), and PendingStubs() must not be emitted for a method with no returns.
+		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickOn) Once()"),
+			"Once() must not be emitted for a method with no returns")
+		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickOn) Always()"),
+			"Always() must not be emitted for a method with no returns")
+		// PendingStubs is provided by the embedded mockCallsHelper (returns 0 for
+		// no-return methods), not as a direct declaration on the per-method type.
+		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickCalls) PendingStubs()"),
+			"PendingStubs() must not be a direct declaration on the per-method inspect type")
+		// The stub type itself must not be declared.
+		Expect(out).NotTo(ContainSubstring("serviceMockTickStub"),
+			"stub struct must not be declared for a method with no returns")
 	})
 
 	It("a single-return method emits ReturnAll, Return().<Name>, and ReturnCustom (no arity-1 special case)", func() {
@@ -534,7 +550,11 @@ type Service interface {
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) ReturnAll(string string)"))
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Return() serviceMockGreetReturn"))
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) ReturnCustom(value func(string) string)"))
-		Expect(out).To(ContainSubstring("func (this serviceMockGreetReturn) String(value string)"))
+		// Per-slot setters return the setter type (chainable), not void.
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetReturn) String(value string) serviceMockGreetReturn"))
+		// Once() and Always() must be emitted, both returning the per-return setter.
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Once() serviceMockGreetReturn"))
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Always() serviceMockGreetReturn"))
 	})
 
 	It("non-empty inline interface renders methods inline", func() {

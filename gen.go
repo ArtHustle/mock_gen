@@ -316,6 +316,10 @@ type InterfaceData struct {
 	// Methods is one entry per method on the interface (including methods
 	// reached through embedding). Order is stable across runs.
 	Methods []MethodData
+	// CallsHelperType is the unexported name of the per-mock generic
+	// inspection helper (e.g. "serviceMockCallsHelper"). One declared per
+	// generated mock so two mocks in the same package don't collide.
+	CallsHelperType string
 }
 
 // MethodData describes one method on a generated mock. Every field needed
@@ -392,6 +396,17 @@ type MethodData struct {
 	// `Return()` namespace — MethodName is the bare return name
 	// (e.g. "Id", "Err"). One per return value.
 	IndividualReturnSetters []SetterMethod
+
+	// StubType is the per-queue-entry struct type name
+	// (e.g. "serviceMockSendStub"). Contains the same fields as the
+	// return-slot fields. Empty when the method has no returns.
+	StubType string
+	// OnceType is the per-method namespace returned by Once()
+	// (e.g. "serviceMockSendOnce"). Single method: Return(). Empty when no returns.
+	OnceType string
+	// AlwaysType is the per-method namespace returned by Always()
+	// (e.g. "serviceMockSendAlways"). Single method: Return(). Empty when no returns.
+	AlwaysType string
 }
 
 // FieldData is a generic `Name Type` pair used for struct fields.
@@ -809,6 +824,7 @@ func (this *generator) collectInterfaceData(name string, iface *types.Interface)
 		ConfigEntryName:  configEntry,
 		InspectType:      unexportedTypeName(mockName + inspectEntry),
 		ConfigType:       unexportedTypeName(mockName + configEntry),
+		CallsHelperType:  unexportedTypeName(mockName + "CallsHelper"),
 		Methods:          []MethodData{},
 	}
 
@@ -917,6 +933,9 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 		methodData.ReturnsSetterName = "ReturnAll"
 		methodData.CustomReturnSetterName = "ReturnCustom"
 		methodData.PerReturnSetterType = unexportedTypeName(mockName + method.Name() + "Return")
+		methodData.StubType = unexportedTypeName(mockName + method.Name() + "Stub")
+		methodData.OnceType = unexportedTypeName(mockName + method.Name() + "Once")
+		methodData.AlwaysType = unexportedTypeName(mockName + method.Name() + "Always")
 		for i, rf := range methodData.ReturnFields {
 			methodData.IndividualReturnSetters = append(
 				methodData.IndividualReturnSetters,

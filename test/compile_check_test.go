@@ -121,6 +121,51 @@ type Runtime interface {
 	Subscribe(ctx context.Context, topics []string, handler func(Event) error) (cancel func(), err error)
 }`, Options{Async: true}),
 	)
+
+	// Regression test: two source files in the same package must not produce
+	// duplicate-declaration errors for the per-mock helper type. Before the
+	// fix, both files emitted a package-level `mockCallsHelper` type, causing
+	// a compile error when both mocks landed in the same `test/` directory.
+	It("two source files in the same package build without duplicate declarations", func() {
+		GinkgoHelper()
+
+		tempDir, err := os.MkdirTemp(os.TempDir(), "mock_gen_multisrc_")
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { os.RemoveAll(tempDir) })
+
+		Expect(os.WriteFile(
+			filepath.Join(tempDir, "go.mod"),
+			[]byte("module multimock\n\ngo 1.23\n"),
+			0644,
+		)).To(Succeed())
+
+		aPath := filepath.Join(tempDir, "a.go")
+		Expect(os.WriteFile(aPath, []byte(`package src
+type A interface { DoA() error }
+`), 0644)).To(Succeed())
+
+		bPath := filepath.Join(tempDir, "b.go")
+		Expect(os.WriteFile(bPath, []byte(`package src
+type B interface { DoB() error }
+`), 0644)).To(Succeed())
+
+		testDir := filepath.Join(tempDir, "test")
+		Expect(os.MkdirAll(testDir, 0755)).To(Succeed())
+
+		aMock, err := GenerateMockFileWithOptions(aPath, Options{})
+		Expect(err).NotTo(HaveOccurred(), "generator failed for a.go")
+		Expect(os.WriteFile(filepath.Join(testDir, "a_mock.go"), []byte(aMock), 0644)).To(Succeed())
+
+		bMock, err := GenerateMockFileWithOptions(bPath, Options{})
+		Expect(err).NotTo(HaveOccurred(), "generator failed for b.go")
+		Expect(os.WriteFile(filepath.Join(testDir, "b_mock.go"), []byte(bMock), 0644)).To(Succeed())
+
+		cmd := exec.Command("go", "build", "./test/")
+		cmd.Dir = tempDir
+		output, buildErr := cmd.CombinedOutput()
+		Expect(buildErr).NotTo(HaveOccurred(),
+			"two mocks in same package must compile without duplicate declarations:\n%s", string(output))
+	})
 })
 
 // compileGeneratedMock writes a minimal Go module to a tempdir, runs the

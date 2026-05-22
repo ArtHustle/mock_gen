@@ -6,7 +6,112 @@
 {{end}}{{range .Imports.NonStdImports}}	{{.}}
 {{end}})
 
-{{end}}{{range $iface := .Interfaces}}{{/* ============================================
+{{end}}{{range $iface := .Interfaces}}{{/* ============================================================
+   {{$iface.CallsHelperType}} is a per-mock generic type emitted once per
+   generated mock. It holds the per-method state pointers that every per-method
+   <X>Calls type needs, and provides the shared method bodies (Count,
+   At, Last, All, Reset, PendingStubs, and — when --async — WaitForCount
+   and WaitForCall).
+
+   Naming is per-mock (e.g. "serviceMockCallsHelper") so two mocks in
+   the same package never collide, even when generated from separate source
+   files.
+   ============================================================ */}}
+type {{$iface.CallsHelperType}}[CT any] struct {
+{{- if $.Options.Async}}
+	mu *sync.Mutex
+{{end}}	log         *[]CT
+	pendingFn   func() int
+	indexer     func(length, i int) int
+{{- if $.Options.Async}}
+	indexGetter func(CT) int
+{{end}}
+}
+
+// Count returns the number of recorded calls.
+func (this {{$iface.CallsHelperType}}[CT]) Count() int {
+{{- if $.Options.Async}}
+	this.mu.Lock()
+	defer this.mu.Unlock()
+{{end}}	return len(*this.log)
+}
+
+// At returns the i-th recorded call. Negative i counts from the end.
+// Panics on out-of-range with a message that surfaces both the input
+// and the log length.
+func (this {{$iface.CallsHelperType}}[CT]) At(i int) CT {
+{{- if $.Options.Async}}
+	this.mu.Lock()
+	defer this.mu.Unlock()
+{{end}}	return (*this.log)[this.indexer(len(*this.log), i)]
+}
+
+// Last is sugar for At(-1).
+func (this {{$iface.CallsHelperType}}[CT]) Last() CT {
+	return this.At(-1)
+}
+
+// All returns a defensive copy of the full call log.
+func (this {{$iface.CallsHelperType}}[CT]) All() []CT {
+{{- if $.Options.Async}}
+	this.mu.Lock()
+	defer this.mu.Unlock()
+{{end}}	out := make([]CT, len(*this.log))
+	copy(out, *this.log)
+	return out
+}
+
+// Reset clears the call log.
+func (this {{$iface.CallsHelperType}}[CT]) Reset() {
+{{- if $.Options.Async}}
+	this.mu.Lock()
+	defer this.mu.Unlock()
+{{end}}	*this.log = nil
+}
+
+// PendingStubs returns the number of unconsumed Once() stub entries.
+// Returns 0 for methods with no return values.
+func (this {{$iface.CallsHelperType}}[CT]) PendingStubs() int {
+{{- if $.Options.Async}}
+	this.mu.Lock()
+	defer this.mu.Unlock()
+{{end}}	return this.pendingFn()
+}
+
+{{if $.Options.Async}}// WaitForCount blocks until at least n calls have been recorded, or until
+// timeout elapses. Returns nil on success, an error describing the current
+// count on timeout. Polls every 1ms.
+//
+// Implemented in terms of WaitForCall with an Index-based predicate; the
+// timeout error is rebuilt so it surfaces n and the current count.
+func (this {{$iface.CallsHelperType}}[CT]) WaitForCount(n int, timeout time.Duration) error {
+	if n <= 0 {
+		return nil
+	}
+	if err := this.WaitForCall(func(c CT) bool { return this.indexGetter(c) >= n-1 }, timeout); err != nil {
+		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
+	}
+	return nil
+}
+
+// WaitForCall blocks until at least one recorded call satisfies the
+// predicate, or until timeout elapses. Returns nil on success, an error on
+// timeout. Polls every 1ms; on each poll, scans every recorded call from
+// oldest to newest.
+func (this {{$iface.CallsHelperType}}[CT]) WaitForCall(predicate func(CT) bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if slices.ContainsFunc(this.All(), predicate) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+{{end}}{{/* ============================================
    Per-method record + sub-struct + config-struct types.
    Emitted at file scope so they're public consumption types.
    =========================================================== */}}
@@ -28,9 +133,21 @@ type {{$method.ReturnType}} struct {
 {{range $method.ReturnFields}}	{{.Name}} {{.Type}}
 {{end}}}
 
-type {{$method.CfgType}} struct {
+{{if $method.StubType}}// {{$method.StubType}} holds one set of return values — used for sticky cfg,
+// Once() queue entries, and Always() fallback.
+type {{$method.StubType}} struct {
 {{range $method.CfgReturnFields}}	{{.Name}} {{.Type}}
-{{end}}{{if $method.HandlerFieldName}}	{{$method.HandlerFieldName}} {{$method.HandlerType}}
+{{end}}}
+
+{{end}}type {{$method.CfgType}} struct {
+	sticky    {{if $method.StubType}}{{$method.StubType}}{{else}}struct{}{{end}}
+	stickySet bool
+{{if $method.StubType}}	stubQueue  []{{$method.StubType}}
+	alwaysStub {{$method.StubType}}
+	alwaysSet  bool
+{{end}}{{if $method.HandlerFieldName}}	handlerSet bool
+
+	handler {{$method.HandlerType}}
 {{end}}}
 
 {{end}}{{/* ===== Mock struct ===== */}}
@@ -60,7 +177,16 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 	})
 	__mockCallIdx := len(this.{{$method.LogField}}) - 1
 	__mockHandler := this.{{$method.CfgField}}.{{$method.HandlerFieldName}}
-{{range $i, $rf := $method.CfgReturnFields}}	__mockR{{$i}} := this.{{$method.CfgField}}.{{$rf.Name}}
+	var __mockSource {{$method.StubType}}
+	if len(this.{{$method.CfgField}}.stubQueue) > 0 {
+		__mockSource = this.{{$method.CfgField}}.stubQueue[0]
+		this.{{$method.CfgField}}.stubQueue = this.{{$method.CfgField}}.stubQueue[1:]
+	} else if this.{{$method.CfgField}}.alwaysSet {
+		__mockSource = this.{{$method.CfgField}}.alwaysStub
+	} else {
+		__mockSource = this.{{$method.CfgField}}.sticky
+	}
+{{range $i, $rf := $method.CfgReturnFields}}	__mockR{{$i}} := __mockSource.{{$rf.Name}}
 {{end}}{{- if $.Options.Async}}	this.mu.Unlock()
 
 {{end}}{{range $i, $rf := $method.ReturnFields}}	var __mockRet{{$i}} {{$rf.Type}}
@@ -114,87 +240,61 @@ func (this {{$iface.InspectType}}) Reset() {
 {{end}}}
 
 {{range $method := $iface.Methods}}func (this {{$iface.InspectType}}) {{$method.Name}}() {{$method.InspectMethodType}} {
-	return {{$method.InspectMethodType}}{m: this.m}
+	return {{$method.InspectMethodType}}{ {{$iface.CallsHelperType}}: {{$iface.CallsHelperType}}[{{$method.CallType}}]{
+{{- if $.Options.Async}}
+		mu:          &this.m.mu,
+		indexGetter: func(c {{$method.CallType}}) int { return c.Index },
+{{end}}		log:       &this.m.{{$method.LogField}},
+		pendingFn: func() int { {{if $method.StubType}}return len(this.m.{{$method.CfgField}}.stubQueue){{else}}return 0{{end}} },
+		indexer:   this.m.callIndex,
+	}}
 }
 
-{{end}}{{/* ===== Per-method inspection types ===== */}}
-{{range $method := $iface.Methods}}type {{$method.InspectMethodType}} struct{ m *{{$iface.MockName}} }
-
-// Count returns the number of recorded calls to {{$iface.Name}}.{{$method.Name}}.
-func (this {{$method.InspectMethodType}}) Count() int {
+{{end}}{{/* ===== PendingStubs (mock-level) ===== */}}
+// PendingStubs returns the total number of unconsumed Once() stub entries
+// across all methods on this mock.
+func (this {{$iface.InspectType}}) PendingStubs() int {
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}	return len(this.m.{{$method.LogField}})
+{{end}}	n := 0
+{{range $method := $iface.Methods}}{{if $method.StubType}}	n += len(this.m.{{$method.CfgField}}.stubQueue)
+{{end}}{{end}}	return n
 }
 
-// At returns the i-th recorded call. Negative i counts from the end.
-// Panics on out-of-range with a message that surfaces both the input
-// and the log length.
-func (this {{$method.InspectMethodType}}) At(i int) {{$method.CallType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
+// {{$iface.MockName}}VerifyT is the interface Verify accepts. *testing.T satisfies it.
+type {{$iface.MockName}}VerifyT interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+// Verify calls t.Errorf if any method has unconsumed Once() stub entries.
+// It does not call t.Fatal so other teardown checks still run.
+func (this {{$iface.InspectType}}) Verify(t {{$iface.MockName}}VerifyT) {
+	t.Helper()
+{{if $.Options.Async}}	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}	return this.m.{{$method.LogField}}[this.m.callIndex(len(this.m.{{$method.LogField}}), i)]
-}
-
-// Last is sugar for At(-1).
-func (this {{$method.InspectMethodType}}) Last() {{$method.CallType}} {
-	return this.At(-1)
-}
-
-// All returns a defensive copy of the full call log.
-func (this {{$method.InspectMethodType}}) All() []{{$method.CallType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	out := make([]{{$method.CallType}}, len(this.m.{{$method.LogField}}))
-	copy(out, this.m.{{$method.LogField}})
-	return out
-}
-
-// Reset clears the call log for {{$method.Name}}.
-func (this {{$method.InspectMethodType}}) Reset() {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	this.m.{{$method.LogField}} = nil
-}
-
-{{if $.Options.Async}}// WaitForCount blocks until at least n calls to {{$method.Name}} have been
-// recorded, or until timeout elapses. Returns nil on success, an error
-// describing the current count on timeout. Polls every 1ms.
-//
-// Implemented in terms of WaitForCall with an Index-based predicate; the
-// timeout error is rebuilt so it surfaces n and the current count.
-func (this {{$method.InspectMethodType}}) WaitForCount(n int, timeout time.Duration) error {
-	if n <= 0 {
-		return nil
-	}
-	if err := this.WaitForCall(func(c {{$method.CallType}}) bool { return c.Index >= n-1 }, timeout); err != nil {
-		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
-	}
-	return nil
-}
-
-// WaitForCall blocks until at least one recorded call to {{$method.Name}}
-// satisfies the predicate, or until timeout elapses. Returns nil on
-// success, an error on timeout. Polls every 1ms; on each poll, scans every
-// recorded call from oldest to newest.
-func (this {{$method.InspectMethodType}}) WaitForCall(predicate func({{$method.CallType}}) bool, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if slices.ContainsFunc(this.All(), predicate) {
-			return nil
+{{end}}	total, breakdown := 0, ""
+{{range $method := $iface.Methods}}{{if $method.StubType}}	if n := len(this.m.{{$method.CfgField}}.stubQueue); n > 0 {
+		total += n
+		if breakdown != "" {
+			breakdown += ", "
 		}
-		if time.Now().After(deadline) {
-			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
-		}
-		time.Sleep(time.Millisecond)
+		breakdown += "{{$method.Name}}: " + strconv.Itoa(n)
+	}
+{{end}}{{end}}	if total > 0 {
+		t.Errorf("{{$iface.MockName}}: " + strconv.Itoa(total) + " unconsumed stubs (" + breakdown + ")")
 	}
 }
 
-{{end}}{{end}}{{/* ===== Configuration namespace ===== */}}
+{{/* ===== Per-method inspection types ===== */}}
+{{range $method := $iface.Methods}}// {{$method.InspectMethodType}} is the per-method inspection namespace for
+// {{$iface.Name}}.{{$method.Name}}. Methods are provided by the embedded {{$iface.CallsHelperType}}.
+type {{$method.InspectMethodType}} struct {
+	{{$iface.CallsHelperType}}[{{$method.CallType}}]
+}
+
+{{end}}{{/* ===== Configuration namespace ===== */}}
 type {{$iface.ConfigType}} struct{ m *{{$iface.MockName}} }
 
 // {{$iface.ConfigEntryName}} returns the configuration namespace — one method per
@@ -225,14 +325,25 @@ func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}{{range $method.CfgReturnFields}}	this.m.{{$method.CfgField}}.{{.Name}} = {{.Name}}
+{{end}}	if this.m.{{$method.CfgField}}.alwaysSet || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
+		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.{{$method.CfgField}}.stickySet = true
+{{range $method.CfgReturnFields}}	this.m.{{$method.CfgField}}.sticky.{{.Name}} = {{.Name}}
 {{end}}}
 
 // Return returns the per-return setter namespace — one method per return
 // value of {{$method.Name}}, each overriding just that return without
 // touching the others.
 func (this {{$method.ConfigMethodType}}) Return() {{$method.PerReturnSetterType}} {
-	return {{$method.PerReturnSetterType}}{m: this.m}
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	if this.m.{{$method.CfgField}}.alwaysSet || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
+		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.{{$method.CfgField}}.stickySet = true
+	return {{$method.PerReturnSetterType}}{m: this.m, target: &this.m.{{$method.CfgField}}.sticky}
 }
 
 // {{$method.CustomReturnSetterName}} installs a dynamic function called instead of returning the
@@ -241,7 +352,38 @@ func (this {{$method.ConfigMethodType}}) {{$method.CustomReturnSetterName}}(valu
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}	this.m.{{$method.CfgField}}.{{$method.HandlerFieldName}} = value
+{{end}}	if this.m.{{$method.CfgField}}.alwaysSet || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
+		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.{{$method.CfgField}}.handlerSet = true
+	this.m.{{$method.CfgField}}.{{$method.HandlerFieldName}} = value
+}
+
+// Once arms a single-call return; the stub is consumed by the next call
+// to {{$method.Name}} and then discarded.
+func (this {{$method.ConfigMethodType}}) Once() {{$method.PerReturnSetterType}} {
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	if this.m.{{$method.CfgField}}.stickySet || this.m.{{$method.CfgField}}.handlerSet {
+		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.{{$method.CfgField}}.stubQueue = append(this.m.{{$method.CfgField}}.stubQueue, {{$method.StubType}}{})
+	return {{$method.PerReturnSetterType}}{m: this.m, target: &this.m.{{$method.CfgField}}.stubQueue[len(this.m.{{$method.CfgField}}.stubQueue)-1]}
+}
+
+// Always arms a fallback return used when the Once() queue is exhausted.
+// Subsequent calls to Always() replace the previous fallback.
+func (this {{$method.ConfigMethodType}}) Always() {{$method.PerReturnSetterType}} {
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	if this.m.{{$method.CfgField}}.stickySet || this.m.{{$method.CfgField}}.handlerSet {
+		panic("{{$iface.MockName}}.{{$method.Name}}: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.{{$method.CfgField}}.alwaysSet = true
+	this.m.{{$method.CfgField}}.alwaysStub = {{$method.StubType}}{}
+	return {{$method.PerReturnSetterType}}{m: this.m, target: &this.m.{{$method.CfgField}}.alwaysStub}
 }
 
 {{end}}// Reset clears configured returns and installed handler for {{$method.Name}}.
@@ -254,15 +396,25 @@ func (this {{$method.ConfigMethodType}}) Reset() {
 
 {{if $method.ReturnFields}}// {{$method.PerReturnSetterType}} is the per-return setter namespace for
 // {{$method.Name}}. Each method overrides one return value without
-// touching the others.
-type {{$method.PerReturnSetterType}} struct{ m *{{$iface.MockName}} }
+// touching the others. Methods return the setter itself for chaining.
+type {{$method.PerReturnSetterType}} struct {
+	m      *{{$iface.MockName}}
+	target *{{$method.StubType}}
+}
+
+// Return is a no-op that returns this setter, allowing Once().Return().X()
+// and Always().Return().X() chaining syntax.
+func (this {{$method.PerReturnSetterType}}) Return() {{$method.PerReturnSetterType}} {
+	return this
+}
 
 {{range $method.IndividualReturnSetters}}// {{.MethodName}} overrides just the {{.FieldName}} return value.
-func (this {{$method.PerReturnSetterType}}) {{.MethodName}}(value {{.ParamType}}) {
+func (this {{$method.PerReturnSetterType}}) {{.MethodName}}(value {{.ParamType}}) {{$method.PerReturnSetterType}} {
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}	this.m.{{$method.CfgField}}.{{.FieldName}} = value
+{{end}}	this.target.{{.FieldName}} = value
+	return this
 }
 
 {{end}}{{end}}{{end}}{{/* end range setters / if ReturnFields / range $method */}}{{/* ===== callIndex helper (per mock) ===== */}}

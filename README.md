@@ -101,23 +101,76 @@ Same-package types, imported types (with collision-resolving aliases), generics,
 - **`Last() Call`** — sugar for `At(-1)`.
 - **`All() []Call`** — defensive copy of the full log.
 - **`Reset()`** — clears this method's log.
+- **`PendingStubs() int`** — number of unconsumed `Once` entries in this method's queue. `Always` does not count (it is a fallback, not a single-shot entry).
 
 Each `Call` has `Param` and `Return` sub-fields containing the recorded args (in) and returned values (out) for that call.
 
 `mock.Calls().Reset()` clears every method's log at once, without touching configured returns or handlers.
+
+`mock.Calls().PendingStubs()` sums unconsumed `Once` entries across all methods.
+
+`mock.Calls().Verify(t)` calls `t.Helper()` and, if any method has unconsumed stubs, calls `t.Errorf` with a per-method breakdown (e.g. `"ServiceMock: 2 unconsumed stubs (Get: 2)"`). It does not call `t.Fatal`, so other teardown checks still run. This is part of the stable contract.
 
 ### `On()` — configuration
 
 `mock.On()` returns a namespace where every interface method becomes an accessor. Each accessor returns a per-method config object with:
 
 - **`ReturnAll(...)`** — set all static return values positionally.
-- **`Return().X(value)`** — override just the `X` return (where `X` is the title-cased return name). The rest keep their currently-armed values. Subsequent `ReturnAll(...)` overwrites every slot positionally.
+- **`Return().X(value)`** — override just the `X` return (where `X` is the title-cased return name). Per-slot setters chain, so `Return().X(a).Y(b)` works as one statement. The two-statement form still works. Subsequent `ReturnAll(...)` overwrites every slot positionally.
 - **`ReturnCustom(func(...))`** — install a dynamic function called instead of returning the static values.
-- **`Reset()`** — clears `ReturnAll`-set values, `Return()`-set values, and the `ReturnCustom` handler for this method.
+- **`Once().Return().X(value)`** — queue a single-shot return. Each `Once()` appends one entry to the per-method FIFO queue. Calls consume the queue head first.
+- **`Always().Return().X(value)`** — install (or replace) a fallback return used after the queue is exhausted. Multiple `Always()` calls are allowed; the last one wins.
+- **`Reset()`** — clears `ReturnAll`-set values, `Return()`-set values, the `ReturnCustom` handler, the `Once` queue, and the `Always` fallback for this method.
 
 `mock.On().Reset()` clears every method's config at once, without touching the call logs.
 
 `mock.Reset()` clears both — equivalent to `mock.Calls().Reset()` followed by `mock.On().Reset()`.
+
+## Sequenced stubs
+
+For tests that need different return values on successive calls, `Once()` and `Always()` build a per-method FIFO queue:
+
+```go
+// Queue two specific returns, then fall back to a steady state:
+m.On().GetProductByID().Once().Return().Product(Product{ID: "abc"}).Err(nil)
+m.On().GetProductByID().Once().Return().Err(errors.New("transient"))
+m.On().GetProductByID().Always().Return().Product(defaultProduct).Err(nil)
+```
+
+**Dispatch order per call:**
+1. Pop the head of the queue if non-empty (`Once` entries, FIFO).
+2. Otherwise use the `Always` fallback if set.
+3. Otherwise fall through to static (`ReturnAll` / `Return().X(...)`) values.
+4. Otherwise zero values.
+
+**Rules:**
+- `Once()` and `Always()` may be mixed freely — add any number of `Once()` entries and any number of `Always()` replacements in any order.
+- Mixing the sticky path (`Return()`, `ReturnAll`, `ReturnCustom`) with the queued path (`Once`, `Always`) **panics** with a descriptive message. Call `Reset()` first if you need to switch modes mid-test.
+- `Always()` does **not** count as a pending stub — it is a fallback, not a single-shot entry.
+- Per-slot setters chain: `Once().Return().X(a).Y(b).Err(nil)` sets all three slots in one statement. Last write within a single entry wins.
+
+## Verification at teardown
+
+After the system under test runs, assert that all queued stubs were consumed:
+
+```go
+// In TestFoo, or a t.Cleanup / defer:
+m.Calls().Verify(t)
+```
+
+`Verify(t)` calls `t.Helper()` and, if any method has unconsumed `Once` entries, calls `t.Errorf` with a per-method breakdown. It does not call `t.Fatal` so other teardown checks still run.
+
+Check counts programmatically:
+
+```go
+// Unconsumed Once entries for one method:
+n := m.Calls().GetProductByID().PendingStubs()
+
+// Sum across all methods:
+total := m.Calls().PendingStubs()
+```
+
+Both `PendingStubs()` and `Verify(t)` are part of the stable API contract.
 
 ## Call recording
 
@@ -205,8 +258,9 @@ type InterfaceData struct {
     MockName         string  // generated mock type, e.g. "ServiceMock"
     InspectEntryName string  // "Calls" by default
     ConfigEntryName  string  // "On" by default
-    InspectType      string  // "ServiceMockCalls"
-    ConfigType       string  // "ServiceMockOn"
+    InspectType      string  // "serviceMockCalls"
+    ConfigType       string  // "serviceMockOn"
+    CallsHelperType  string  // per-mock generic inspection helper, e.g. "serviceMockCallsHelper"
     Methods          []MethodData
 }
 
@@ -230,6 +284,9 @@ type MethodData struct {
     ReturnsSetterName       string  // "ReturnAll" (empty when no returns)
     CustomReturnSetterName  string  // "ReturnCustom" (empty when no returns)
     IndividualReturnSetters []SetterMethod  // MethodName is the bare return name, e.g. "Id"
+    StubType                string  // per-queue-entry struct type, e.g. "serviceMockSendStub" (empty when no returns)
+    OnceType                string  // namespace returned by On().<Method>().Once(), e.g. "serviceMockSendOnce" (empty when no returns)
+    AlwaysType              string  // namespace returned by On().<Method>().Always(), e.g. "serviceMockSendAlways" (empty when no returns)
 }
 ```
 
@@ -278,6 +335,16 @@ content, err := mock_gen.GenerateMockContentWithOptions(sourceCode, mock_gen.Opt
 ```
 
 ## Versioning
+
+v0.12.0 adds sequenced stubs and teardown verification. **Additive, backward-compatible.**
+
+- **No breaking changes.** All v0.11 code keeps working without modification.
+- **One behavior change** (unreachable by v0.11 code): mixing the sticky path (`Return()`, `ReturnAll`, `ReturnCustom`) with the queued path (`Once`, `Always`) now panics. Code that never called `Once()` or `Always()` is unaffected.
+- **Additive ergonomic**: per-slot setters (`Return().X(value)`) now return the setter type, so `Return().X(a).Y(b)` chains as one statement. The two-statement form keeps working.
+- **New API**: `Once()`, `Always()` on per-method config; `PendingStubs()` on per-method and mock-level inspect; `Verify(t)` on mock-level inspect.
+- **Custom-template authors**:
+  - Three new `MethodData` fields — `StubType`, `OnceType`, `AlwaysType` — are populated for methods with return values and empty otherwise.
+  - One new `InterfaceData` field — `CallsHelperType` — names a per-mock generic helper (e.g. `serviceMockCallsHelper[CT any]`) that the default template emits once per mock and embeds into each per-method `<Method>Calls` type. This is the source of the `Count`/`At`/`Last`/`All`/`Reset`/`PendingStubs`/`WaitForCount`/`WaitForCall` method set. Authors of templates that copy `DefaultTemplate()` get this automatically; authors of from-scratch templates can ignore it (they own their own emission).
 
 v0.11.0 renamed the per-method config setters. Migration:
 

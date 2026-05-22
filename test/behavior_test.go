@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -862,6 +863,85 @@ if got := m.Calls().Send().Count(); got != N {
 	})
 })
 
+// splitHarnessCode separates harnessCode into file-scope declarations and
+// function-body statements. Lines that start with "type ", "func ", "var ", or
+// "const " (at column 0, i.e. not indented) and their associated brace-enclosed
+// bodies are treated as file-scope declarations and returned in the first return
+// value. The remaining lines are returned as the body code.
+func splitHarnessCode(harnessCode string) (fileScope, body string) {
+	lines := strings.Split(harnessCode, "\n")
+	var scopeLines, bodyLines []string
+	inDecl := false
+	braceDepth := 0
+	passedDecls := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !passedDecls {
+			isDecl := strings.HasPrefix(trimmed, "type ") ||
+				strings.HasPrefix(trimmed, "func ") ||
+				strings.HasPrefix(trimmed, "var ") ||
+				strings.HasPrefix(trimmed, "const ")
+			if inDecl {
+				scopeLines = append(scopeLines, line)
+				for _, ch := range line {
+					if ch == '{' {
+						braceDepth++
+					} else if ch == '}' {
+						braceDepth--
+					}
+				}
+				if braceDepth == 0 {
+					inDecl = false
+				}
+				continue
+			}
+			if isDecl {
+				inDecl = true
+				scopeLines = append(scopeLines, line)
+				for _, ch := range line {
+					if ch == '{' {
+						braceDepth++
+					} else if ch == '}' {
+						braceDepth--
+					}
+				}
+				if braceDepth == 0 {
+					inDecl = false
+				}
+				continue
+			}
+			if trimmed == "" {
+				// blank line between declarations or before body
+				if len(scopeLines) > 0 {
+					// might be a separator; defer decision
+					scopeLines = append(scopeLines, line)
+				}
+				continue
+			}
+			// Non-blank, non-declaration line: this and everything after is body
+			passedDecls = true
+			// trim trailing blank lines from scopeLines
+			for len(scopeLines) > 0 && strings.TrimSpace(scopeLines[len(scopeLines)-1]) == "" {
+				scopeLines = scopeLines[:len(scopeLines)-1]
+			}
+			bodyLines = append(bodyLines, line)
+		} else {
+			bodyLines = append(bodyLines, line)
+		}
+	}
+
+	if len(scopeLines) > 0 {
+		// trim trailing blank lines
+		for len(scopeLines) > 0 && strings.TrimSpace(scopeLines[len(scopeLines)-1]) == "" {
+			scopeLines = scopeLines[:len(scopeLines)-1]
+		}
+		fileScope = strings.Join(scopeLines, "\n")
+	}
+	body = strings.Join(bodyLines, "\n")
+	return fileScope, body
+}
+
 // runMockBehavior generates a mock for the given source and runs the given
 // harness code as the body of a `TestBehavior` function in the tempdir's
 // test package. Fails the spec if `go test` errors.
@@ -896,11 +976,15 @@ func runMockBehavior(source, harnessCode string, opts Options, extras ...string)
 		0644,
 	)).To(Succeed())
 
+	fileScope, bodyCode := splitHarnessCode(harnessCode)
 	harness := "package test\n\nimport \"testing\"\n"
 	for _, e := range extras {
 		harness += e + "\n"
 	}
-	harness += "\nfunc TestBehavior(t *testing.T) {\n" + harnessCode + "\n}\n"
+	if fileScope != "" {
+		harness += fileScope + "\n"
+	}
+	harness += "\nfunc TestBehavior(t *testing.T) {\n" + bodyCode + "\n}\n"
 	Expect(os.WriteFile(
 		filepath.Join(testDir, "behavior_test.go"),
 		[]byte(harness),

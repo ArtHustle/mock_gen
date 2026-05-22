@@ -26,6 +26,47 @@ import (
 	"strconv"
 )
 
+type serviceMockCallsHelper[CT any] struct {
+	log       *[]CT
+	pendingFn func() int
+	indexer   func(length, i int) int
+}
+
+// Count returns the number of recorded calls.
+func (this serviceMockCallsHelper[CT]) Count() int {
+	return len(*this.log)
+}
+
+// At returns the i-th recorded call. Negative i counts from the end.
+// Panics on out-of-range with a message that surfaces both the input
+// and the log length.
+func (this serviceMockCallsHelper[CT]) At(i int) CT {
+	return (*this.log)[this.indexer(len(*this.log), i)]
+}
+
+// Last is sugar for At(-1).
+func (this serviceMockCallsHelper[CT]) Last() CT {
+	return this.At(-1)
+}
+
+// All returns a defensive copy of the full call log.
+func (this serviceMockCallsHelper[CT]) All() []CT {
+	out := make([]CT, len(*this.log))
+	copy(out, *this.log)
+	return out
+}
+
+// Reset clears the call log.
+func (this serviceMockCallsHelper[CT]) Reset() {
+	*this.log = nil
+}
+
+// PendingStubs returns the number of unconsumed Once() stub entries.
+// Returns 0 for methods with no return values.
+func (this serviceMockCallsHelper[CT]) PendingStubs() int {
+	return this.pendingFn()
+}
+
 // ServiceMockProcessCall records one call to Service.Process.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
@@ -43,6 +84,8 @@ type ServiceMockProcessReturn struct {
 }
 
 type serviceMockProcessCfg struct {
+	sticky    struct{}
+	stickySet bool
 }
 
 type ServiceMock struct {
@@ -84,38 +127,39 @@ func (this serviceMockCalls) Reset() {
 }
 
 func (this serviceMockCalls) Process() serviceMockProcessCalls {
-	return serviceMockProcessCalls{m: this.m}
+	return serviceMockProcessCalls{serviceMockCallsHelper: serviceMockCallsHelper[ServiceMockProcessCall]{log: &this.m.processLog,
+		pendingFn: func() int { return 0 },
+		indexer:   this.m.callIndex,
+	}}
 }
 
-type serviceMockProcessCalls struct{ m *ServiceMock }
-
-// Count returns the number of recorded calls to Service.Process.
-func (this serviceMockProcessCalls) Count() int {
-	return len(this.m.processLog)
+// PendingStubs returns the total number of unconsumed Once() stub entries
+// across all methods on this mock.
+func (this serviceMockCalls) PendingStubs() int {
+	n := 0
+	return n
 }
 
-// At returns the i-th recorded call. Negative i counts from the end.
-// Panics on out-of-range with a message that surfaces both the input
-// and the log length.
-func (this serviceMockProcessCalls) At(i int) ServiceMockProcessCall {
-	return this.m.processLog[this.m.callIndex(len(this.m.processLog), i)]
+// ServiceMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
+type ServiceMockVerifyT interface {
+	Helper()
+	Errorf(format string, args ...any)
 }
 
-// Last is sugar for At(-1).
-func (this serviceMockProcessCalls) Last() ServiceMockProcessCall {
-	return this.At(-1)
+// Verify calls t.Errorf if any method has unconsumed Once() stub entries.
+// It does not call t.Fatal so other teardown checks still run.
+func (this serviceMockCalls) Verify(t ServiceMockVerifyT) {
+	t.Helper()
+	total, breakdown := 0, ""
+	if total > 0 {
+		t.Errorf("ServiceMock: " + strconv.Itoa(total) + " unconsumed stubs (" + breakdown + ")")
+	}
 }
 
-// All returns a defensive copy of the full call log.
-func (this serviceMockProcessCalls) All() []ServiceMockProcessCall {
-	out := make([]ServiceMockProcessCall, len(this.m.processLog))
-	copy(out, this.m.processLog)
-	return out
-}
-
-// Reset clears the call log for Process.
-func (this serviceMockProcessCalls) Reset() {
-	this.m.processLog = nil
+// serviceMockProcessCalls is the per-method inspection namespace for
+// Service.Process. Methods are provided by the embedded serviceMockCallsHelper.
+type serviceMockProcessCalls struct {
+	serviceMockCallsHelper[ServiceMockProcessCall]
 }
 
 type serviceMockOn struct{ m *ServiceMock }
@@ -179,6 +223,92 @@ import (
 	"time"
 )
 
+type serviceMockCallsHelper[CT any] struct {
+	mu          *sync.Mutex
+	log         *[]CT
+	pendingFn   func() int
+	indexer     func(length, i int) int
+	indexGetter func(CT) int
+}
+
+// Count returns the number of recorded calls.
+func (this serviceMockCallsHelper[CT]) Count() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return len(*this.log)
+}
+
+// At returns the i-th recorded call. Negative i counts from the end.
+// Panics on out-of-range with a message that surfaces both the input
+// and the log length.
+func (this serviceMockCallsHelper[CT]) At(i int) CT {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return (*this.log)[this.indexer(len(*this.log), i)]
+}
+
+// Last is sugar for At(-1).
+func (this serviceMockCallsHelper[CT]) Last() CT {
+	return this.At(-1)
+}
+
+// All returns a defensive copy of the full call log.
+func (this serviceMockCallsHelper[CT]) All() []CT {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	out := make([]CT, len(*this.log))
+	copy(out, *this.log)
+	return out
+}
+
+// Reset clears the call log.
+func (this serviceMockCallsHelper[CT]) Reset() {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	*this.log = nil
+}
+
+// PendingStubs returns the number of unconsumed Once() stub entries.
+// Returns 0 for methods with no return values.
+func (this serviceMockCallsHelper[CT]) PendingStubs() int {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.pendingFn()
+}
+
+// WaitForCount blocks until at least n calls have been recorded, or until
+// timeout elapses. Returns nil on success, an error describing the current
+// count on timeout. Polls every 1ms.
+//
+// Implemented in terms of WaitForCall with an Index-based predicate; the
+// timeout error is rebuilt so it surfaces n and the current count.
+func (this serviceMockCallsHelper[CT]) WaitForCount(n int, timeout time.Duration) error {
+	if n <= 0 {
+		return nil
+	}
+	if err := this.WaitForCall(func(c CT) bool { return this.indexGetter(c) >= n-1 }, timeout); err != nil {
+		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
+	}
+	return nil
+}
+
+// WaitForCall blocks until at least one recorded call satisfies the
+// predicate, or until timeout elapses. Returns nil on success, an error on
+// timeout. Polls every 1ms; on each poll, scans every recorded call from
+// oldest to newest.
+func (this serviceMockCallsHelper[CT]) WaitForCall(predicate func(CT) bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if slices.ContainsFunc(this.All(), predicate) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // ServiceMockSendCall records one call to Service.Send.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
@@ -199,9 +329,21 @@ type ServiceMockSendReturn struct {
 	Err error
 }
 
+// serviceMockSendStub holds one set of return values — used for sticky cfg,
+// Once() queue entries, and Always() fallback.
+type serviceMockSendStub struct {
+	id  string
+	err error
+}
+
 type serviceMockSendCfg struct {
-	id      string
-	err     error
+	sticky     serviceMockSendStub
+	stickySet  bool
+	stubQueue  []serviceMockSendStub
+	alwaysStub serviceMockSendStub
+	alwaysSet  bool
+	handlerSet bool
+
 	handler func(context.Context, string) (string, error)
 }
 
@@ -227,8 +369,17 @@ func (this *ServiceMock) Send(ctx context.Context, email string) (id string, err
 	})
 	__mockCallIdx := len(this.sendLog) - 1
 	__mockHandler := this.sendCfg.handler
-	__mockR0 := this.sendCfg.id
-	__mockR1 := this.sendCfg.err
+	var __mockSource serviceMockSendStub
+	if len(this.sendCfg.stubQueue) > 0 {
+		__mockSource = this.sendCfg.stubQueue[0]
+		this.sendCfg.stubQueue = this.sendCfg.stubQueue[1:]
+	} else if this.sendCfg.alwaysSet {
+		__mockSource = this.sendCfg.alwaysStub
+	} else {
+		__mockSource = this.sendCfg.sticky
+	}
+	__mockR0 := __mockSource.id
+	__mockR1 := __mockSource.err
 	this.mu.Unlock()
 
 	var __mockRet0 string
@@ -270,79 +421,54 @@ func (this serviceMockCalls) Reset() {
 }
 
 func (this serviceMockCalls) Send() serviceMockSendCalls {
-	return serviceMockSendCalls{m: this.m}
+	return serviceMockSendCalls{serviceMockCallsHelper: serviceMockCallsHelper[ServiceMockSendCall]{
+		mu:          &this.m.mu,
+		indexGetter: func(c ServiceMockSendCall) int { return c.Index },
+		log:         &this.m.sendLog,
+		pendingFn:   func() int { return len(this.m.sendCfg.stubQueue) },
+		indexer:     this.m.callIndex,
+	}}
 }
 
-type serviceMockSendCalls struct{ m *ServiceMock }
-
-// Count returns the number of recorded calls to Service.Send.
-func (this serviceMockSendCalls) Count() int {
+// PendingStubs returns the total number of unconsumed Once() stub entries
+// across all methods on this mock.
+func (this serviceMockCalls) PendingStubs() int {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-	return len(this.m.sendLog)
+	n := 0
+	n += len(this.m.sendCfg.stubQueue)
+	return n
 }
 
-// At returns the i-th recorded call. Negative i counts from the end.
-// Panics on out-of-range with a message that surfaces both the input
-// and the log length.
-func (this serviceMockSendCalls) At(i int) ServiceMockSendCall {
+// ServiceMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
+type ServiceMockVerifyT interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+// Verify calls t.Errorf if any method has unconsumed Once() stub entries.
+// It does not call t.Fatal so other teardown checks still run.
+func (this serviceMockCalls) Verify(t ServiceMockVerifyT) {
+	t.Helper()
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-	return this.m.sendLog[this.m.callIndex(len(this.m.sendLog), i)]
-}
-
-// Last is sugar for At(-1).
-func (this serviceMockSendCalls) Last() ServiceMockSendCall {
-	return this.At(-1)
-}
-
-// All returns a defensive copy of the full call log.
-func (this serviceMockSendCalls) All() []ServiceMockSendCall {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	out := make([]ServiceMockSendCall, len(this.m.sendLog))
-	copy(out, this.m.sendLog)
-	return out
-}
-
-// Reset clears the call log for Send.
-func (this serviceMockSendCalls) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.sendLog = nil
-}
-
-// WaitForCount blocks until at least n calls to Send have been
-// recorded, or until timeout elapses. Returns nil on success, an error
-// describing the current count on timeout. Polls every 1ms.
-//
-// Implemented in terms of WaitForCall with an Index-based predicate; the
-// timeout error is rebuilt so it surfaces n and the current count.
-func (this serviceMockSendCalls) WaitForCount(n int, timeout time.Duration) error {
-	if n <= 0 {
-		return nil
-	}
-	if err := this.WaitForCall(func(c ServiceMockSendCall) bool { return c.Index >= n-1 }, timeout); err != nil {
-		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
-	}
-	return nil
-}
-
-// WaitForCall blocks until at least one recorded call to Send
-// satisfies the predicate, or until timeout elapses. Returns nil on
-// success, an error on timeout. Polls every 1ms; on each poll, scans every
-// recorded call from oldest to newest.
-func (this serviceMockSendCalls) WaitForCall(predicate func(ServiceMockSendCall) bool, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if slices.ContainsFunc(this.All(), predicate) {
-			return nil
+	total, breakdown := 0, ""
+	if n := len(this.m.sendCfg.stubQueue); n > 0 {
+		total += n
+		if breakdown != "" {
+			breakdown += ", "
 		}
-		if time.Now().After(deadline) {
-			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
-		}
-		time.Sleep(time.Millisecond)
+		breakdown += "Send: " + strconv.Itoa(n)
 	}
+	if total > 0 {
+		t.Errorf("ServiceMock: " + strconv.Itoa(total) + " unconsumed stubs (" + breakdown + ")")
+	}
+}
+
+// serviceMockSendCalls is the per-method inspection namespace for
+// Service.Send. Methods are provided by the embedded serviceMockCallsHelper.
+type serviceMockSendCalls struct {
+	serviceMockCallsHelper[ServiceMockSendCall]
 }
 
 type serviceMockOn struct{ m *ServiceMock }
@@ -372,15 +498,25 @@ type serviceMockSendOn struct{ m *ServiceMock }
 func (this serviceMockSendOn) ReturnAll(id string, err error) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-	this.m.sendCfg.id = id
-	this.m.sendCfg.err = err
+	if this.m.sendCfg.alwaysSet || len(this.m.sendCfg.stubQueue) > 0 {
+		panic("ServiceMock.Send: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.sendCfg.stickySet = true
+	this.m.sendCfg.sticky.id = id
+	this.m.sendCfg.sticky.err = err
 }
 
 // Return returns the per-return setter namespace — one method per return
 // value of Send, each overriding just that return without
 // touching the others.
 func (this serviceMockSendOn) Return() serviceMockSendReturn {
-	return serviceMockSendReturn{m: this.m}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+	if this.m.sendCfg.alwaysSet || len(this.m.sendCfg.stubQueue) > 0 {
+		panic("ServiceMock.Send: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.sendCfg.stickySet = true
+	return serviceMockSendReturn{m: this.m, target: &this.m.sendCfg.sticky}
 }
 
 // ReturnCustom installs a dynamic function called instead of returning the
@@ -388,7 +524,36 @@ func (this serviceMockSendOn) Return() serviceMockSendReturn {
 func (this serviceMockSendOn) ReturnCustom(value func(context.Context, string) (string, error)) {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
+	if this.m.sendCfg.alwaysSet || len(this.m.sendCfg.stubQueue) > 0 {
+		panic("ServiceMock.Send: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.sendCfg.handlerSet = true
 	this.m.sendCfg.handler = value
+}
+
+// Once arms a single-call return; the stub is consumed by the next call
+// to Send and then discarded.
+func (this serviceMockSendOn) Once() serviceMockSendReturn {
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+	if this.m.sendCfg.stickySet || this.m.sendCfg.handlerSet {
+		panic("ServiceMock.Send: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.sendCfg.stubQueue = append(this.m.sendCfg.stubQueue, serviceMockSendStub{})
+	return serviceMockSendReturn{m: this.m, target: &this.m.sendCfg.stubQueue[len(this.m.sendCfg.stubQueue)-1]}
+}
+
+// Always arms a fallback return used when the Once() queue is exhausted.
+// Subsequent calls to Always() replace the previous fallback.
+func (this serviceMockSendOn) Always() serviceMockSendReturn {
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+	if this.m.sendCfg.stickySet || this.m.sendCfg.handlerSet {
+		panic("ServiceMock.Send: sticky stub conflicts with non-empty queue; call .Reset() first or stay on the .Once()/.Always() chain")
+	}
+	this.m.sendCfg.alwaysSet = true
+	this.m.sendCfg.alwaysStub = serviceMockSendStub{}
+	return serviceMockSendReturn{m: this.m, target: &this.m.sendCfg.alwaysStub}
 }
 
 // Reset clears configured returns and installed handler for Send.
@@ -400,21 +565,32 @@ func (this serviceMockSendOn) Reset() {
 
 // serviceMockSendReturn is the per-return setter namespace for
 // Send. Each method overrides one return value without
-// touching the others.
-type serviceMockSendReturn struct{ m *ServiceMock }
+// touching the others. Methods return the setter itself for chaining.
+type serviceMockSendReturn struct {
+	m      *ServiceMock
+	target *serviceMockSendStub
+}
+
+// Return is a no-op that returns this setter, allowing Once().Return().X()
+// and Always().Return().X() chaining syntax.
+func (this serviceMockSendReturn) Return() serviceMockSendReturn {
+	return this
+}
 
 // Id overrides just the id return value.
-func (this serviceMockSendReturn) Id(value string) {
+func (this serviceMockSendReturn) Id(value string) serviceMockSendReturn {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-	this.m.sendCfg.id = value
+	this.target.id = value
+	return this
 }
 
 // Err overrides just the err return value.
-func (this serviceMockSendReturn) Err(value error) {
+func (this serviceMockSendReturn) Err(value error) serviceMockSendReturn {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-	this.m.sendCfg.err = value
+	this.target.err = value
+	return this
 }
 
 // callIndex resolves the index argument of Method_call(i)-style indexers:
@@ -448,6 +624,47 @@ import (
 	"strconv"
 )
 
+type serviceMockCallsHelper[CT any] struct {
+	log       *[]CT
+	pendingFn func() int
+	indexer   func(length, i int) int
+}
+
+// Count returns the number of recorded calls.
+func (this serviceMockCallsHelper[CT]) Count() int {
+	return len(*this.log)
+}
+
+// At returns the i-th recorded call. Negative i counts from the end.
+// Panics on out-of-range with a message that surfaces both the input
+// and the log length.
+func (this serviceMockCallsHelper[CT]) At(i int) CT {
+	return (*this.log)[this.indexer(len(*this.log), i)]
+}
+
+// Last is sugar for At(-1).
+func (this serviceMockCallsHelper[CT]) Last() CT {
+	return this.At(-1)
+}
+
+// All returns a defensive copy of the full call log.
+func (this serviceMockCallsHelper[CT]) All() []CT {
+	out := make([]CT, len(*this.log))
+	copy(out, *this.log)
+	return out
+}
+
+// Reset clears the call log.
+func (this serviceMockCallsHelper[CT]) Reset() {
+	*this.log = nil
+}
+
+// PendingStubs returns the number of unconsumed Once() stub entries.
+// Returns 0 for methods with no return values.
+func (this serviceMockCallsHelper[CT]) PendingStubs() int {
+	return this.pendingFn()
+}
+
 // ServiceMockDoSomethingCall records one call to Service.DoSomething.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
@@ -465,6 +682,8 @@ type ServiceMockDoSomethingReturn struct {
 }
 
 type serviceMockDoSomethingCfg struct {
+	sticky    struct{}
+	stickySet bool
 }
 
 type ServiceMock struct {
@@ -506,38 +725,39 @@ func (this serviceMockCalls) Reset() {
 }
 
 func (this serviceMockCalls) DoSomething() serviceMockDoSomethingCalls {
-	return serviceMockDoSomethingCalls{m: this.m}
+	return serviceMockDoSomethingCalls{serviceMockCallsHelper: serviceMockCallsHelper[ServiceMockDoSomethingCall]{log: &this.m.doSomethingLog,
+		pendingFn: func() int { return 0 },
+		indexer:   this.m.callIndex,
+	}}
 }
 
-type serviceMockDoSomethingCalls struct{ m *ServiceMock }
-
-// Count returns the number of recorded calls to Service.DoSomething.
-func (this serviceMockDoSomethingCalls) Count() int {
-	return len(this.m.doSomethingLog)
+// PendingStubs returns the total number of unconsumed Once() stub entries
+// across all methods on this mock.
+func (this serviceMockCalls) PendingStubs() int {
+	n := 0
+	return n
 }
 
-// At returns the i-th recorded call. Negative i counts from the end.
-// Panics on out-of-range with a message that surfaces both the input
-// and the log length.
-func (this serviceMockDoSomethingCalls) At(i int) ServiceMockDoSomethingCall {
-	return this.m.doSomethingLog[this.m.callIndex(len(this.m.doSomethingLog), i)]
+// ServiceMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
+type ServiceMockVerifyT interface {
+	Helper()
+	Errorf(format string, args ...any)
 }
 
-// Last is sugar for At(-1).
-func (this serviceMockDoSomethingCalls) Last() ServiceMockDoSomethingCall {
-	return this.At(-1)
+// Verify calls t.Errorf if any method has unconsumed Once() stub entries.
+// It does not call t.Fatal so other teardown checks still run.
+func (this serviceMockCalls) Verify(t ServiceMockVerifyT) {
+	t.Helper()
+	total, breakdown := 0, ""
+	if total > 0 {
+		t.Errorf("ServiceMock: " + strconv.Itoa(total) + " unconsumed stubs (" + breakdown + ")")
+	}
 }
 
-// All returns a defensive copy of the full call log.
-func (this serviceMockDoSomethingCalls) All() []ServiceMockDoSomethingCall {
-	out := make([]ServiceMockDoSomethingCall, len(this.m.doSomethingLog))
-	copy(out, this.m.doSomethingLog)
-	return out
-}
-
-// Reset clears the call log for DoSomething.
-func (this serviceMockDoSomethingCalls) Reset() {
-	this.m.doSomethingLog = nil
+// serviceMockDoSomethingCalls is the per-method inspection namespace for
+// Service.DoSomething. Methods are provided by the embedded serviceMockCallsHelper.
+type serviceMockDoSomethingCalls struct {
+	serviceMockCallsHelper[ServiceMockDoSomethingCall]
 }
 
 type serviceMockOn struct{ m *ServiceMock }

@@ -112,6 +112,9 @@ type Service interface {
 // Returns setter: {{.ReturnsSetterName}}
 // Custom setter: {{.CustomReturnSetterName}}
 // Per-return type: {{.PerReturnSetterType}}
+// StubType: {{.StubType}}
+// OnceType: {{.OnceType}}
+// AlwaysType: {{.AlwaysType}}
 {{range .IndividualReturnSetters}}// Setter: {{.MethodName}}({{.ParamType}}) -> {{.FieldName}}
 {{end}}{{end}}{{end}}
 type Stub struct{}
@@ -134,11 +137,14 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring("// Returns setter: ReturnAll"))
 		Expect(out).To(ContainSubstring("// Custom setter: ReturnCustom"))
 		Expect(out).To(ContainSubstring("// Per-return type: serviceMockSendReturn"))
+		Expect(out).To(ContainSubstring("// StubType: serviceMockSendStub"))
+		Expect(out).To(ContainSubstring("// OnceType: serviceMockSendOnce"))
+		Expect(out).To(ContainSubstring("// AlwaysType: serviceMockSendAlways"))
 		Expect(out).To(ContainSubstring("// Setter: Id(string) -> id"))
 		Expect(out).To(ContainSubstring("// Setter: Err(error) -> err"))
 	})
 
-	It("methods with no returns have no HandlerFieldName, no ReturnsSetterName, no CustomReturnSetterName, no PerReturnSetterType, no IndividualReturnSetters", func() {
+	It("methods with no returns have no HandlerFieldName, no ReturnsSetterName, no CustomReturnSetterName, no PerReturnSetterType, no IndividualReturnSetters, no StubType/OnceType/AlwaysType", func() {
 		input := `package pkg
 
 type Service interface {
@@ -151,6 +157,9 @@ type Service interface {
 // custom-setter={{.CustomReturnSetterName | printf "%q"}}
 // per-return-type={{.PerReturnSetterType | printf "%q"}}
 // ind-setters={{len .IndividualReturnSetters}}
+// stub-type={{.StubType | printf "%q"}}
+// once-type={{.OnceType | printf "%q"}}
+// always-type={{.AlwaysType | printf "%q"}}
 {{end}}{{end}}
 type Stub struct{}
 `
@@ -161,6 +170,9 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring(`// custom-setter=""`))
 		Expect(out).To(ContainSubstring(`// per-return-type=""`))
 		Expect(out).To(ContainSubstring("// ind-setters=0"))
+		Expect(out).To(ContainSubstring(`// stub-type=""`))
+		Expect(out).To(ContainSubstring(`// once-type=""`))
+		Expect(out).To(ContainSubstring(`// always-type=""`))
 	})
 
 	// --- access to SignatureData ---
