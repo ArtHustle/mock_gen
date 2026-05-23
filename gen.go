@@ -320,6 +320,22 @@ type InterfaceData struct {
 	// inspection helper (e.g. "serviceMockCallsHelper"). One declared per
 	// generated mock so two mocks in the same package don't collide.
 	CallsHelperType string
+	// TimelineEntryType is the exported per-mock timeline-entry type name
+	// (e.g. "ServiceMockTimelineEntry"). Records one call across any method
+	// in invocation order.
+	TimelineEntryType string
+	// CallInterfaceType is the exported per-mock interface type name
+	// (e.g. "ServiceMockCall") satisfied by every per-method <CallType>
+	// and by <TimelineEntryType>. Enables HappenedBefore comparisons across
+	// concrete call types.
+	CallInterfaceType string
+	// TimelineLogField is the unexported []<TimelineEntryType> slice field
+	// name on the mock struct (e.g. "timelineLog").
+	TimelineLogField string
+	// GlobalCounterField is the unexported int counter field name on the
+	// mock struct (e.g. "globalCallCounter"). Incremented once per recorded
+	// call, under the snapshot lock when --async.
+	GlobalCounterField string
 }
 
 // MethodData describes one method on a generated mock. Every field needed
@@ -828,14 +844,18 @@ func (this *generator) collectInterfaceData(name string, iface *types.Interface)
 	}
 
 	ifaceData := InterfaceData{
-		Name:             name,
-		MockName:         mockName,
-		InspectEntryName: inspectEntry,
-		ConfigEntryName:  configEntry,
-		InspectType:      unexportedTypeName(mockName + inspectEntry),
-		ConfigType:       unexportedTypeName(mockName + configEntry),
-		CallsHelperType:  unexportedTypeName(mockName + "CallsHelper"),
-		Methods:          []MethodData{},
+		Name:               name,
+		MockName:           mockName,
+		InspectEntryName:   inspectEntry,
+		ConfigEntryName:    configEntry,
+		InspectType:        unexportedTypeName(mockName + inspectEntry),
+		ConfigType:         unexportedTypeName(mockName + configEntry),
+		CallsHelperType:    unexportedTypeName(mockName + "CallsHelper"),
+		TimelineEntryType:  mockName + "TimelineEntry",
+		CallInterfaceType:  mockName + "Call",
+		TimelineLogField:   "timelineLog",
+		GlobalCounterField: "globalCallCounter",
+		Methods:            []MethodData{},
 	}
 
 	for i := range iface.NumMethods() {

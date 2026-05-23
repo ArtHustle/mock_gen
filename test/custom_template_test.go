@@ -53,6 +53,10 @@ type Service interface {
 // Inspect entry: {{.InspectEntryName}} -> type {{.InspectType}}
 // Config entry: {{.ConfigEntryName}} -> type {{.ConfigType}}
 // CallsHelper: {{.CallsHelperType}}
+// TimelineEntry: {{.TimelineEntryType}}
+// CallInterface: {{.CallInterfaceType}}
+// TimelineLogField: {{.TimelineLogField}}
+// GlobalCounterField: {{.GlobalCounterField}}
 // Methods: {{len .Methods}}
 {{end}}
 type Stub struct{}
@@ -64,6 +68,10 @@ type Stub struct{}
 		Expect(out).To(ContainSubstring("// Inspect entry: Calls -> type serviceMockCalls"))
 		Expect(out).To(ContainSubstring("// Config entry: On -> type serviceMockOn"))
 		Expect(out).To(ContainSubstring("// CallsHelper: serviceMockCallsHelper"))
+		Expect(out).To(ContainSubstring("// TimelineEntry: ServiceMockTimelineEntry"))
+		Expect(out).To(ContainSubstring("// CallInterface: ServiceMockCall"))
+		Expect(out).To(ContainSubstring("// TimelineLogField: timelineLog"))
+		Expect(out).To(ContainSubstring("// GlobalCounterField: globalCallCounter"))
 		Expect(out).To(ContainSubstring("// Methods: 1"))
 	})
 

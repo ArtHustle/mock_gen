@@ -100,16 +100,20 @@ Same-package types, imported types (with collision-resolving aliases), generics,
 - **`At(i int) Call`** — i-th recorded call. Negative `i` counts from the end (`-1` is the last, `-2` second-to-last). Out-of-range panics with a descriptive message that includes the input index, resolved index, and log length.
 - **`Last() Call`** — sugar for `At(-1)`.
 - **`All() []Call`** — defensive copy of the full log.
-- **`Reset()`** — clears this method's log.
+- **`Reset()`** — clears this method's log. Does **not** clear the cross-method timeline; use `mock.Reset()` or `mock.Calls().Reset()` for that.
 - **`PendingStubs() int`** — number of unconsumed `Once` entries in this method's queue. `Always` does not count (it is a fallback, not a single-shot entry).
+- **`Any(func(Call) bool) bool`** — true iff at least one recorded call satisfies the predicate. See [Filtering recorded calls](#filtering-recorded-calls).
+- **`Filter(func(Call) bool) []Call`** — every recorded call satisfying the predicate, in invocation order. Returns an empty non-nil slice on no match.
 
-Each `Call` has `Param` and `Return` sub-fields containing the recorded args (in) and returned values (out) for that call.
+Each `Call` has `Index`, `GlobalIndex`, `Param`, and `Return` sub-fields. `Param` and `Return` hold the recorded args (in) and returned values (out). `Index` is the per-method position; `GlobalIndex` is mock-wide — see [Timeline and ordering](#timeline-and-ordering).
 
-`mock.Calls().Reset()` clears every method's log at once, without touching configured returns or handlers.
+`mock.Calls().Reset()` clears every method's log and the cross-method timeline, without touching configured returns or handlers.
 
 `mock.Calls().PendingStubs()` sums unconsumed `Once` entries across all methods — both unconditional and `When`-conditional.
 
 `mock.Calls().Verify(t)` calls `t.Helper()` and, if any method has unconsumed stubs, calls `t.Errorf` with a per-method breakdown (e.g. `"ServiceMock: 2 unconsumed stubs (Get: 2)"`). It does not call `t.Fatal`, so other teardown checks still run. This is part of the stable contract.
+
+`mock.Calls().Timeline()` returns every recorded call across all methods in invocation order. `mock.Calls().AssertOrder(t, c1, c2, ...)` fails the test if the given call handles weren't recorded in the given order. See [Timeline and ordering](#timeline-and-ordering).
 
 ### `On()` — configuration
 
@@ -237,6 +241,68 @@ last := mock.Calls().Send().Last()
 require.Equal(t, "user@x.com", last.Param.Email)
 require.NoError(t, last.Return.Err)
 ```
+
+Each `Call` also has `Index int` (per-method position) and `GlobalIndex int` (mock-wide position) — see [Timeline and ordering](#timeline-and-ordering).
+
+## Filtering recorded calls
+
+Each per-method `Calls()` namespace exposes `Any(pred)` and `Filter(pred)` for predicate-based assertions:
+
+```go
+// Was Send ever called with email == "vip@x.com" AND returned a non-nil error?
+if mock.Calls().Send().Any(func(c ServiceMockSendCall) bool {
+    return c.Param.Email == "vip@x.com" && c.Return.Err != nil
+}) {
+    t.Fatal("VIP send should not have errored")
+}
+
+// Collect every call that returned an error:
+errored := mock.Calls().Send().Filter(func(c ServiceMockSendCall) bool {
+    return c.Return.Err != nil
+})
+require.Len(t, errored, 2)
+```
+
+The predicate sees the full `<CallType>` value — `Index`, `GlobalIndex`, `Param`, and `Return`. This is the deliberate asymmetry with v0.13's `When(pred)`: `When` runs at dispatch time and so can't see `Return`; `Any`/`Filter` run on already-recorded calls and have it.
+
+- `Filter` returns an empty non-nil slice on no match.
+- Passing a `nil` predicate panics with `"<helper>.Any: predicate is nil"` / `"<helper>.Filter: predicate is nil"`. Silent match-all would hide accidental nils.
+- Under `--async`, both methods snapshot the log under the mutex and run the predicate after release. Predicates may safely call back into the mock without deadlocking.
+
+## Timeline and ordering
+
+Every recorded call carries a mock-wide `GlobalIndex int` alongside its per-method `Index`. The counter ticks once per call across all methods, so the timeline answers ordering questions that the per-method view cannot:
+
+```go
+// Did Send happen before Close?
+if !mock.Calls().Send().Last().HappenedBefore(mock.Calls().Close().Last()) {
+    t.Fatal("Send must precede Close")
+}
+
+// Or assert a sequence in one call:
+mock.Calls().AssertOrder(t,
+    mock.Calls().Send().At(0),
+    mock.Calls().Send().At(1),
+    mock.Calls().Close().Last(),
+)
+```
+
+- `HappenedBefore(other)` is a strict less-than over `GlobalIndex`; `c.HappenedBefore(c)` is false.
+- `HappenedBefore` accepts any value satisfying the per-mock `<MockName>Call` interface — every per-method `<CallType>` and `<MockName>TimelineEntry` value satisfies it, so comparisons across different methods compose without type assertions.
+- `AssertOrder(t, entries...)` reuses the same `VerifyT` interface as `Verify(t)` (`Helper()`, `Errorf(...)`). Fails on the first out-of-order pair with a message including the entry indices and their `GlobalIndex` values. Empty or one-entry input is a no-op.
+
+The full timeline is also available as a slice:
+
+```go
+tl := mock.Calls().Timeline()
+for _, e := range tl {
+    fmt.Printf("global #%d: %s[%d]\n", e.GlobalIndex, e.Method, e.Index)
+}
+```
+
+Each `<MockName>TimelineEntry` has `Method string`, `Index int` (per-method position at recording time), and `GlobalIndex int`. The returned slice is a defensive copy.
+
+`mock.Reset()` and `mock.Calls().Reset()` clear the timeline and reset the counter to zero. Per-method `mock.Calls().<Method>().Reset()` does **not** clear the timeline — it records that the call happened, and that fact stays true even after the per-method log is cleared. Callers who want a full wipe should use the mock-level or `Calls()`-level Reset.
 
 ## Async-safe mocks
 
@@ -382,6 +448,16 @@ content, err := mock_gen.GenerateMockContentWithOptions(sourceCode, mock_gen.Opt
 ```
 
 ## Versioning
+
+v0.14.0 adds cross-method ordering and per-method call predicates. **Additive, backward-compatible.**
+
+- **No breaking changes.** All v0.13 code keeps working without modification.
+- **New API**:
+  - Mock-level: `mock.Calls().Timeline() []<MockName>TimelineEntry` and `mock.Calls().AssertOrder(t, c1, c2, ...)`.
+  - Per-method (via the existing generic CallsHelper): `mock.Calls().<Method>().Any(pred)` and `Filter(pred)`.
+  - Every per-method `<CallType>` gains a `GlobalIndex int` field plus `Global() int` and `HappenedBefore(other <MockName>Call) bool` methods. A new per-mock `<MockName>Call` interface unifies cross-type comparison; `<MockName>TimelineEntry` also implements it.
+- **Behavior**: mock-level `Reset()` and `Calls().Reset()` clear the timeline and reset the mock-wide call counter to zero. Per-method `Calls().<Method>().Reset()` only clears that method's log, intentionally — the timeline records that a call happened, and that fact stays true even after the per-method log is cleared.
+- **Custom-template authors**: four new `InterfaceData` fields — `TimelineEntryType`, `CallInterfaceType`, `TimelineLogField`, `GlobalCounterField` — populate every generated mock. No new `MethodData` fields; the per-`<CallType>` additions (`GlobalIndex` field, `Global`/`HappenedBefore` methods) are templated inline from existing context.
 
 v0.13.0 adds typed-predicate argument matchers via `When(pred)`. **Additive, backward-compatible.**
 

@@ -573,6 +573,40 @@ type Service interface {
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOnWhen) Always() serviceMockGreetReturn"))
 	})
 
+	It("emits the v0.14 timeline surface: per-mock interface, entry type, Timeline + AssertOrder on inspect, GlobalIndex on CallType", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
+
+type Service interface {
+	Send(email string) (id string, err error)
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		// Per-mock interface and timeline entry are declared at package scope.
+		Expect(out).To(ContainSubstring("type ServiceMockCall interface {"))
+		Expect(out).To(ContainSubstring("type ServiceMockTimelineEntry struct {"))
+		// Timeline entry implements the call interface via Global() + HappenedBefore.
+		Expect(out).To(ContainSubstring("func (this ServiceMockTimelineEntry) Global() int"))
+		Expect(out).To(ContainSubstring("func (this ServiceMockTimelineEntry) HappenedBefore(other ServiceMockCall) bool"))
+		// Per-method <CallType> carries GlobalIndex and the same methods.
+		Expect(out).To(ContainSubstring("GlobalIndex int"))
+		Expect(out).To(ContainSubstring("func (this ServiceMockSendCall) Global() int"))
+		Expect(out).To(ContainSubstring("func (this ServiceMockSendCall) HappenedBefore(other ServiceMockCall) bool"))
+		// Mock-level Timeline and AssertOrder on the inspect namespace.
+		Expect(out).To(ContainSubstring("func (this serviceMockCalls) Timeline() []ServiceMockTimelineEntry"))
+		Expect(out).To(ContainSubstring("func (this serviceMockCalls) AssertOrder(t ServiceMockVerifyT, entries ...ServiceMockCall)"))
+	})
+
+	It("emits Any and Filter on the generic CallsHelper", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
+
+type Service interface {
+	Send(email string) error
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		// Methods live on the generic helper, parameterized by CT.
+		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) Any(pred func(CT) bool) bool"))
+		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) Filter(pred func(CT) bool) []CT"))
+	})
+
 	It("non-empty inline interface renders methods inline", func() {
 		out, err := GenerateMockContentWithOptions(`package pkg
 

@@ -78,6 +78,37 @@ func (this {{$iface.CallsHelperType}}[CT]) PendingStubs() int {
 {{end}}	return this.pendingFn()
 }
 
+// Any returns true iff at least one recorded call satisfies pred.
+// Pred runs after All() returns (no lock held); pred may safely call
+// back into the mock without deadlocking.
+func (this {{$iface.CallsHelperType}}[CT]) Any(pred func(CT) bool) bool {
+	if pred == nil {
+		panic("{{$iface.CallsHelperType}}.Any: predicate is nil")
+	}
+	for _, c := range this.All() {
+		if pred(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter returns every recorded call satisfying pred, in invocation order.
+// Returns an empty (non-nil) slice when no call matches. Pred runs after
+// All() returns; pred may safely call back into the mock.
+func (this {{$iface.CallsHelperType}}[CT]) Filter(pred func(CT) bool) []CT {
+	if pred == nil {
+		panic("{{$iface.CallsHelperType}}.Filter: predicate is nil")
+	}
+	out := []CT{}
+	for _, c := range this.All() {
+		if pred(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 {{if $.Options.Async}}// WaitForCount blocks until at least n calls have been recorded, or until
 // timeout elapses. Returns nil on success, an error describing the current
 // count on timeout. Polls every 1ms.
@@ -111,18 +142,54 @@ func (this {{$iface.CallsHelperType}}[CT]) WaitForCall(predicate func(CT) bool, 
 	}
 }
 
-{{end}}{{/* ============================================
+{{end}}
+// {{$iface.CallInterfaceType}} is satisfied by every per-method <CallType>
+// and by {{$iface.TimelineEntryType}}. Enables HappenedBefore comparisons
+// across concrete call types.
+type {{$iface.CallInterfaceType}} interface {
+    Global() int
+}
+
+// {{$iface.TimelineEntryType}} records one call across any method in
+// invocation order. Method names the source method; Index is the
+// per-method position at the time the call was recorded; GlobalIndex is
+// monotonically increasing across all methods.
+type {{$iface.TimelineEntryType}} struct {
+    Method      string
+    Index       int
+    GlobalIndex int
+}
+
+// Global returns the global ordering position for this entry.
+func (this {{$iface.TimelineEntryType}}) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this entry was recorded before other.
+func (this {{$iface.TimelineEntryType}}) HappenedBefore(other {{$iface.CallInterfaceType}}) bool {
+    return this.GlobalIndex < other.Global()
+}
+
+{{/* ============================================
    Per-method record + sub-struct + config-struct types.
    Emitted at file scope so they're public consumption types.
    =========================================================== */}}
 {{range $method := $iface.Methods}}// {{$method.CallType}} records one call to {{$iface.Name}}.{{$method.Name}}.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset.
+// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
+// mock-wide position assigned when the call was recorded; see Timeline().
 type {{$method.CallType}} struct {
-	Index  int
-	Param  {{$method.ParamType}}
-	Return {{$method.ReturnType}}
+	Index       int
+	GlobalIndex int
+	Param       {{$method.ParamType}}
+	Return      {{$method.ReturnType}}
+}
+
+// Global returns the mock-wide ordering position for this call.
+func (this {{$method.CallType}}) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this call was recorded before other.
+func (this {{$method.CallType}}) HappenedBefore(other {{$iface.CallInterfaceType}}) bool {
+	return this.GlobalIndex < other.Global()
 }
 
 type {{$method.ParamType}} struct {
@@ -166,7 +233,9 @@ type {{$method.ConditionalType}} struct {
 type {{$iface.MockName}} struct {
 {{- if $.Options.Async}}
 	mu sync.Mutex
-{{end}}{{range $method := $iface.Methods}}
+{{end}}	{{$iface.GlobalCounterField}} int
+	{{$iface.TimelineLogField}}        []{{$iface.TimelineEntryType}}
+{{range $method := $iface.Methods}}
 	{{$method.LogField}} []{{$method.CallType}}
 	{{$method.CfgField}} {{$method.CfgType}}
 {{end}}}
@@ -184,11 +253,19 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 {{- if $.Options.Async}}
 	this.mu.Lock()
 {{end}}	__mockParam := {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} }
+	__mockGlobal := this.{{$iface.GlobalCounterField}}
+	this.{{$iface.GlobalCounterField}}++
 	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
-		Index: len(this.{{$method.LogField}}),
-		Param: __mockParam,
+		Index:       len(this.{{$method.LogField}}),
+		GlobalIndex: __mockGlobal,
+		Param:       __mockParam,
 	})
 	__mockCallIdx := len(this.{{$method.LogField}}) - 1
+	this.{{$iface.TimelineLogField}} = append(this.{{$iface.TimelineLogField}}, {{$iface.TimelineEntryType}}{
+		Method:      "{{$method.Name}}",
+		Index:       __mockCallIdx,
+		GlobalIndex: __mockGlobal,
+	})
 	__mockHandler := this.{{$method.CfgField}}.{{$method.HandlerFieldName}}
 	var __mockSource {{$method.StubType}}
 	__mockMatched := false
@@ -254,9 +331,17 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 {{- if $.Options.Async}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-{{end}}	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
-		Index: len(this.{{$method.LogField}}),
-		Param: {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
+{{end}}	__mockGlobal := this.{{$iface.GlobalCounterField}}
+	this.{{$iface.GlobalCounterField}}++
+	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
+		Index:       len(this.{{$method.LogField}}),
+		GlobalIndex: __mockGlobal,
+		Param:       {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
+	})
+	this.{{$iface.TimelineLogField}} = append(this.{{$iface.TimelineLogField}}, {{$iface.TimelineEntryType}}{
+		Method:      "{{$method.Name}}",
+		Index:       len(this.{{$method.LogField}}) - 1,
+		GlobalIndex: __mockGlobal,
 	})
 {{end}}}
 
@@ -265,7 +350,9 @@ func (this *{{$iface.MockName}}) Reset() {
 {{- if $.Options.Async}}
 	this.mu.Lock()
 	defer this.mu.Unlock()
-{{end}}{{range $method := $iface.Methods}}	this.{{$method.LogField}} = nil
+{{end}}	this.{{$iface.GlobalCounterField}} = 0
+	this.{{$iface.TimelineLogField}} = nil
+{{range $method := $iface.Methods}}	this.{{$method.LogField}} = nil
 	this.{{$method.CfgField}} = {{$method.CfgType}}{}
 {{end}}}
 
@@ -278,13 +365,15 @@ func (this *{{$iface.MockName}}) {{$iface.InspectEntryName}}() {{$iface.InspectT
 	return {{$iface.InspectType}}{m: this}
 }
 
-// Reset clears every per-method call log on the mock without touching
-// configured returns or installed handlers.
+// Reset clears every per-method call log on the mock and the cross-method
+// timeline, without touching configured returns or installed handlers.
 func (this {{$iface.InspectType}}) Reset() {
 {{- if $.Options.Async}}
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
-{{end}}{{range $method := $iface.Methods}}	this.m.{{$method.LogField}} = nil
+{{end}}	this.m.{{$iface.GlobalCounterField}} = 0
+	this.m.{{$iface.TimelineLogField}} = nil
+{{range $method := $iface.Methods}}	this.m.{{$method.LogField}} = nil
 {{end}}}
 
 {{range $method := $iface.Methods}}func (this {{$iface.InspectType}}) {{$method.Name}}() {{$method.InspectMethodType}} {
@@ -319,6 +408,37 @@ func (this {{$iface.InspectType}}) PendingStubs() int {
 		n += len(this.m.{{$method.CfgField}}.conditionals[__mockI].stubQueue)
 	}
 {{end}}{{end}}	return n
+}
+
+// Timeline returns a defensive copy of the cross-method call timeline.
+// Each entry names the source method, its per-method index, and a
+// mock-wide GlobalIndex assigned at recording time.
+func (this {{$iface.InspectType}}) Timeline() []{{$iface.TimelineEntryType}} {
+{{- if $.Options.Async}}
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+{{end}}	out := make([]{{$iface.TimelineEntryType}}, len(this.m.{{$iface.TimelineLogField}}))
+	copy(out, this.m.{{$iface.TimelineLogField}})
+	return out
+}
+
+// AssertOrder calls t.Errorf when the given entries were not recorded in
+// the given order. Adjacent entries with the same GlobalIndex (same call
+// passed twice) are treated as in-order. 0 or 1 entries are a no-op.
+func (this {{$iface.InspectType}}) AssertOrder(t {{$iface.MockName}}VerifyT, entries ...{{$iface.CallInterfaceType}}) {
+	t.Helper()
+	if len(entries) < 2 {
+		return
+	}
+	prev := entries[0].Global()
+	for i := 1; i < len(entries); i++ {
+		cur := entries[i].Global()
+		if cur < prev {
+			t.Errorf("{{$iface.MockName}}: AssertOrder violated — entry " + strconv.Itoa(i) + " (global #" + strconv.Itoa(cur) + ") happened before entry " + strconv.Itoa(i-1) + " (global #" + strconv.Itoa(prev) + ")")
+			return
+		}
+		prev = cur
+	}
 }
 
 // {{$iface.MockName}}VerifyT is the interface Verify accepts. *testing.T satisfies it.

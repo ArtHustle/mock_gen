@@ -67,14 +67,80 @@ func (this serviceMockCallsHelper[CT]) PendingStubs() int {
 	return this.pendingFn()
 }
 
+// Any returns true iff at least one recorded call satisfies pred.
+// Pred runs after All() returns (no lock held); pred may safely call
+// back into the mock without deadlocking.
+func (this serviceMockCallsHelper[CT]) Any(pred func(CT) bool) bool {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Any: predicate is nil")
+	}
+	for _, c := range this.All() {
+		if pred(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter returns every recorded call satisfying pred, in invocation order.
+// Returns an empty (non-nil) slice when no call matches. Pred runs after
+// All() returns; pred may safely call back into the mock.
+func (this serviceMockCallsHelper[CT]) Filter(pred func(CT) bool) []CT {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Filter: predicate is nil")
+	}
+	out := []CT{}
+	for _, c := range this.All() {
+		if pred(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ServiceMockCall is satisfied by every per-method <CallType>
+// and by ServiceMockTimelineEntry. Enables HappenedBefore comparisons
+// across concrete call types.
+type ServiceMockCall interface {
+	Global() int
+}
+
+// ServiceMockTimelineEntry records one call across any method in
+// invocation order. Method names the source method; Index is the
+// per-method position at the time the call was recorded; GlobalIndex is
+// monotonically increasing across all methods.
+type ServiceMockTimelineEntry struct {
+	Method      string
+	Index       int
+	GlobalIndex int
+}
+
+// Global returns the global ordering position for this entry.
+func (this ServiceMockTimelineEntry) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this entry was recorded before other.
+func (this ServiceMockTimelineEntry) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
+}
+
 // ServiceMockProcessCall records one call to Service.Process.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset.
+// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
+// mock-wide position assigned when the call was recorded; see Timeline().
 type ServiceMockProcessCall struct {
-	Index  int
-	Param  ServiceMockProcessParam
-	Return ServiceMockProcessReturn
+	Index       int
+	GlobalIndex int
+	Param       ServiceMockProcessParam
+	Return      ServiceMockProcessReturn
+}
+
+// Global returns the mock-wide ordering position for this call.
+func (this ServiceMockProcessCall) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this call was recorded before other.
+func (this ServiceMockProcessCall) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
 }
 
 type ServiceMockProcessParam struct {
@@ -89,6 +155,9 @@ type serviceMockProcessCfg struct {
 }
 
 type ServiceMock struct {
+	globalCallCounter int
+	timelineLog       []ServiceMockTimelineEntry
+
 	processLog []ServiceMockProcessCall
 	processCfg serviceMockProcessCfg
 }
@@ -101,13 +170,23 @@ func NewServiceMock() *ServiceMock {
 }
 
 func (this *ServiceMock) Process() {
+	__mockGlobal := this.globalCallCounter
+	this.globalCallCounter++
 	this.processLog = append(this.processLog, ServiceMockProcessCall{
-		Index: len(this.processLog),
-		Param: ServiceMockProcessParam{},
+		Index:       len(this.processLog),
+		GlobalIndex: __mockGlobal,
+		Param:       ServiceMockProcessParam{},
+	})
+	this.timelineLog = append(this.timelineLog, ServiceMockTimelineEntry{
+		Method:      "Process",
+		Index:       len(this.processLog) - 1,
+		GlobalIndex: __mockGlobal,
 	})
 }
 
 func (this *ServiceMock) Reset() {
+	this.globalCallCounter = 0
+	this.timelineLog = nil
 	this.processLog = nil
 	this.processCfg = serviceMockProcessCfg{}
 }
@@ -120,9 +199,11 @@ func (this *ServiceMock) Calls() serviceMockCalls {
 	return serviceMockCalls{m: this}
 }
 
-// Reset clears every per-method call log on the mock without touching
-// configured returns or installed handlers.
+// Reset clears every per-method call log on the mock and the cross-method
+// timeline, without touching configured returns or installed handlers.
 func (this serviceMockCalls) Reset() {
+	this.m.globalCallCounter = 0
+	this.m.timelineLog = nil
 	this.m.processLog = nil
 }
 
@@ -140,6 +221,34 @@ func (this serviceMockCalls) Process() serviceMockProcessCalls {
 func (this serviceMockCalls) PendingStubs() int {
 	n := 0
 	return n
+}
+
+// Timeline returns a defensive copy of the cross-method call timeline.
+// Each entry names the source method, its per-method index, and a
+// mock-wide GlobalIndex assigned at recording time.
+func (this serviceMockCalls) Timeline() []ServiceMockTimelineEntry {
+	out := make([]ServiceMockTimelineEntry, len(this.m.timelineLog))
+	copy(out, this.m.timelineLog)
+	return out
+}
+
+// AssertOrder calls t.Errorf when the given entries were not recorded in
+// the given order. Adjacent entries with the same GlobalIndex (same call
+// passed twice) are treated as in-order. 0 or 1 entries are a no-op.
+func (this serviceMockCalls) AssertOrder(t ServiceMockVerifyT, entries ...ServiceMockCall) {
+	t.Helper()
+	if len(entries) < 2 {
+		return
+	}
+	prev := entries[0].Global()
+	for i := 1; i < len(entries); i++ {
+		cur := entries[i].Global()
+		if cur < prev {
+			t.Errorf("ServiceMock: AssertOrder violated — entry " + strconv.Itoa(i) + " (global #" + strconv.Itoa(cur) + ") happened before entry " + strconv.Itoa(i-1) + " (global #" + strconv.Itoa(prev) + ")")
+			return
+		}
+		prev = cur
+	}
 }
 
 // ServiceMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
@@ -261,14 +370,80 @@ func (this serviceMockCallsHelper[CT]) PendingStubs() int {
 	return this.pendingFn()
 }
 
+// Any returns true iff at least one recorded call satisfies pred.
+// Pred runs after All() returns (no lock held); pred may safely call
+// back into the mock without deadlocking.
+func (this serviceMockCallsHelper[CT]) Any(pred func(CT) bool) bool {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Any: predicate is nil")
+	}
+	for _, c := range this.All() {
+		if pred(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter returns every recorded call satisfying pred, in invocation order.
+// Returns an empty (non-nil) slice when no call matches. Pred runs after
+// All() returns; pred may safely call back into the mock.
+func (this serviceMockCallsHelper[CT]) Filter(pred func(CT) bool) []CT {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Filter: predicate is nil")
+	}
+	out := []CT{}
+	for _, c := range this.All() {
+		if pred(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ServiceMockCall is satisfied by every per-method <CallType>
+// and by ServiceMockTimelineEntry. Enables HappenedBefore comparisons
+// across concrete call types.
+type ServiceMockCall interface {
+	Global() int
+}
+
+// ServiceMockTimelineEntry records one call across any method in
+// invocation order. Method names the source method; Index is the
+// per-method position at the time the call was recorded; GlobalIndex is
+// monotonically increasing across all methods.
+type ServiceMockTimelineEntry struct {
+	Method      string
+	Index       int
+	GlobalIndex int
+}
+
+// Global returns the global ordering position for this entry.
+func (this ServiceMockTimelineEntry) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this entry was recorded before other.
+func (this ServiceMockTimelineEntry) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
+}
+
 // ServiceMockSendCall records one call to Service.Send.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset.
+// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
+// mock-wide position assigned when the call was recorded; see Timeline().
 type ServiceMockSendCall struct {
-	Index  int
-	Param  ServiceMockSendParam
-	Return ServiceMockSendReturn
+	Index       int
+	GlobalIndex int
+	Param       ServiceMockSendParam
+	Return      ServiceMockSendReturn
+}
+
+// Global returns the mock-wide ordering position for this call.
+func (this ServiceMockSendCall) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this call was recorded before other.
+func (this ServiceMockSendCall) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
 }
 
 type ServiceMockSendParam struct {
@@ -311,6 +486,9 @@ type serviceMockSendCfg struct {
 }
 
 type ServiceMock struct {
+	globalCallCounter int
+	timelineLog       []ServiceMockTimelineEntry
+
 	sendLog []ServiceMockSendCall
 	sendCfg serviceMockSendCfg
 }
@@ -324,11 +502,19 @@ func NewServiceMock() *ServiceMock {
 
 func (this *ServiceMock) Send(email string) (id string, err error) {
 	__mockParam := ServiceMockSendParam{Email: email}
+	__mockGlobal := this.globalCallCounter
+	this.globalCallCounter++
 	this.sendLog = append(this.sendLog, ServiceMockSendCall{
-		Index: len(this.sendLog),
-		Param: __mockParam,
+		Index:       len(this.sendLog),
+		GlobalIndex: __mockGlobal,
+		Param:       __mockParam,
 	})
 	__mockCallIdx := len(this.sendLog) - 1
+	this.timelineLog = append(this.timelineLog, ServiceMockTimelineEntry{
+		Method:      "Send",
+		Index:       __mockCallIdx,
+		GlobalIndex: __mockGlobal,
+	})
 	__mockHandler := this.sendCfg.handler
 	var __mockSource serviceMockSendStub
 	__mockMatched := false
@@ -388,6 +574,8 @@ func (this *ServiceMock) Send(email string) (id string, err error) {
 }
 
 func (this *ServiceMock) Reset() {
+	this.globalCallCounter = 0
+	this.timelineLog = nil
 	this.sendLog = nil
 	this.sendCfg = serviceMockSendCfg{}
 }
@@ -400,9 +588,11 @@ func (this *ServiceMock) Calls() serviceMockCalls {
 	return serviceMockCalls{m: this}
 }
 
-// Reset clears every per-method call log on the mock without touching
-// configured returns or installed handlers.
+// Reset clears every per-method call log on the mock and the cross-method
+// timeline, without touching configured returns or installed handlers.
 func (this serviceMockCalls) Reset() {
+	this.m.globalCallCounter = 0
+	this.m.timelineLog = nil
 	this.m.sendLog = nil
 }
 
@@ -428,6 +618,34 @@ func (this serviceMockCalls) PendingStubs() int {
 		n += len(this.m.sendCfg.conditionals[__mockI].stubQueue)
 	}
 	return n
+}
+
+// Timeline returns a defensive copy of the cross-method call timeline.
+// Each entry names the source method, its per-method index, and a
+// mock-wide GlobalIndex assigned at recording time.
+func (this serviceMockCalls) Timeline() []ServiceMockTimelineEntry {
+	out := make([]ServiceMockTimelineEntry, len(this.m.timelineLog))
+	copy(out, this.m.timelineLog)
+	return out
+}
+
+// AssertOrder calls t.Errorf when the given entries were not recorded in
+// the given order. Adjacent entries with the same GlobalIndex (same call
+// passed twice) are treated as in-order. 0 or 1 entries are a no-op.
+func (this serviceMockCalls) AssertOrder(t ServiceMockVerifyT, entries ...ServiceMockCall) {
+	t.Helper()
+	if len(entries) < 2 {
+		return
+	}
+	prev := entries[0].Global()
+	for i := 1; i < len(entries); i++ {
+		cur := entries[i].Global()
+		if cur < prev {
+			t.Errorf("ServiceMock: AssertOrder violated — entry " + strconv.Itoa(i) + " (global #" + strconv.Itoa(cur) + ") happened before entry " + strconv.Itoa(i-1) + " (global #" + strconv.Itoa(prev) + ")")
+			return
+		}
+		prev = cur
+	}
 }
 
 // ServiceMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
@@ -703,6 +921,37 @@ func (this serviceMockCallsHelper[CT]) PendingStubs() int {
 	return this.pendingFn()
 }
 
+// Any returns true iff at least one recorded call satisfies pred.
+// Pred runs after All() returns (no lock held); pred may safely call
+// back into the mock without deadlocking.
+func (this serviceMockCallsHelper[CT]) Any(pred func(CT) bool) bool {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Any: predicate is nil")
+	}
+	for _, c := range this.All() {
+		if pred(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter returns every recorded call satisfying pred, in invocation order.
+// Returns an empty (non-nil) slice when no call matches. Pred runs after
+// All() returns; pred may safely call back into the mock.
+func (this serviceMockCallsHelper[CT]) Filter(pred func(CT) bool) []CT {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Filter: predicate is nil")
+	}
+	out := []CT{}
+	for _, c := range this.All() {
+		if pred(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // WaitForCount blocks until at least n calls have been recorded, or until
 // timeout elapses. Returns nil on success, an error describing the current
 // count on timeout. Polls every 1ms.
@@ -736,14 +985,49 @@ func (this serviceMockCallsHelper[CT]) WaitForCall(predicate func(CT) bool, time
 	}
 }
 
+// ServiceMockCall is satisfied by every per-method <CallType>
+// and by ServiceMockTimelineEntry. Enables HappenedBefore comparisons
+// across concrete call types.
+type ServiceMockCall interface {
+	Global() int
+}
+
+// ServiceMockTimelineEntry records one call across any method in
+// invocation order. Method names the source method; Index is the
+// per-method position at the time the call was recorded; GlobalIndex is
+// monotonically increasing across all methods.
+type ServiceMockTimelineEntry struct {
+	Method      string
+	Index       int
+	GlobalIndex int
+}
+
+// Global returns the global ordering position for this entry.
+func (this ServiceMockTimelineEntry) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this entry was recorded before other.
+func (this ServiceMockTimelineEntry) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
+}
+
 // ServiceMockSendCall records one call to Service.Send.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset.
+// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
+// mock-wide position assigned when the call was recorded; see Timeline().
 type ServiceMockSendCall struct {
-	Index  int
-	Param  ServiceMockSendParam
-	Return ServiceMockSendReturn
+	Index       int
+	GlobalIndex int
+	Param       ServiceMockSendParam
+	Return      ServiceMockSendReturn
+}
+
+// Global returns the mock-wide ordering position for this call.
+func (this ServiceMockSendCall) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this call was recorded before other.
+func (this ServiceMockSendCall) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
 }
 
 type ServiceMockSendParam struct {
@@ -787,7 +1071,9 @@ type serviceMockSendCfg struct {
 }
 
 type ServiceMock struct {
-	mu sync.Mutex
+	mu                sync.Mutex
+	globalCallCounter int
+	timelineLog       []ServiceMockTimelineEntry
 
 	sendLog []ServiceMockSendCall
 	sendCfg serviceMockSendCfg
@@ -803,11 +1089,19 @@ func NewServiceMock() *ServiceMock {
 func (this *ServiceMock) Send(ctx context.Context, email string) (id string, err error) {
 	this.mu.Lock()
 	__mockParam := ServiceMockSendParam{Ctx: ctx, Email: email}
+	__mockGlobal := this.globalCallCounter
+	this.globalCallCounter++
 	this.sendLog = append(this.sendLog, ServiceMockSendCall{
-		Index: len(this.sendLog),
-		Param: __mockParam,
+		Index:       len(this.sendLog),
+		GlobalIndex: __mockGlobal,
+		Param:       __mockParam,
 	})
 	__mockCallIdx := len(this.sendLog) - 1
+	this.timelineLog = append(this.timelineLog, ServiceMockTimelineEntry{
+		Method:      "Send",
+		Index:       __mockCallIdx,
+		GlobalIndex: __mockGlobal,
+	})
 	__mockHandler := this.sendCfg.handler
 	var __mockSource serviceMockSendStub
 	__mockMatched := false
@@ -875,6 +1169,8 @@ func (this *ServiceMock) Send(ctx context.Context, email string) (id string, err
 func (this *ServiceMock) Reset() {
 	this.mu.Lock()
 	defer this.mu.Unlock()
+	this.globalCallCounter = 0
+	this.timelineLog = nil
 	this.sendLog = nil
 	this.sendCfg = serviceMockSendCfg{}
 }
@@ -887,11 +1183,13 @@ func (this *ServiceMock) Calls() serviceMockCalls {
 	return serviceMockCalls{m: this}
 }
 
-// Reset clears every per-method call log on the mock without touching
-// configured returns or installed handlers.
+// Reset clears every per-method call log on the mock and the cross-method
+// timeline, without touching configured returns or installed handlers.
 func (this serviceMockCalls) Reset() {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
+	this.m.globalCallCounter = 0
+	this.m.timelineLog = nil
 	this.m.sendLog = nil
 }
 
@@ -922,6 +1220,36 @@ func (this serviceMockCalls) PendingStubs() int {
 		n += len(this.m.sendCfg.conditionals[__mockI].stubQueue)
 	}
 	return n
+}
+
+// Timeline returns a defensive copy of the cross-method call timeline.
+// Each entry names the source method, its per-method index, and a
+// mock-wide GlobalIndex assigned at recording time.
+func (this serviceMockCalls) Timeline() []ServiceMockTimelineEntry {
+	this.m.mu.Lock()
+	defer this.m.mu.Unlock()
+	out := make([]ServiceMockTimelineEntry, len(this.m.timelineLog))
+	copy(out, this.m.timelineLog)
+	return out
+}
+
+// AssertOrder calls t.Errorf when the given entries were not recorded in
+// the given order. Adjacent entries with the same GlobalIndex (same call
+// passed twice) are treated as in-order. 0 or 1 entries are a no-op.
+func (this serviceMockCalls) AssertOrder(t ServiceMockVerifyT, entries ...ServiceMockCall) {
+	t.Helper()
+	if len(entries) < 2 {
+		return
+	}
+	prev := entries[0].Global()
+	for i := 1; i < len(entries); i++ {
+		cur := entries[i].Global()
+		if cur < prev {
+			t.Errorf("ServiceMock: AssertOrder violated — entry " + strconv.Itoa(i) + " (global #" + strconv.Itoa(cur) + ") happened before entry " + strconv.Itoa(i-1) + " (global #" + strconv.Itoa(prev) + ")")
+			return
+		}
+		prev = cur
+	}
 }
 
 // ServiceMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
@@ -1206,14 +1534,80 @@ func (this serviceMockCallsHelper[CT]) PendingStubs() int {
 	return this.pendingFn()
 }
 
+// Any returns true iff at least one recorded call satisfies pred.
+// Pred runs after All() returns (no lock held); pred may safely call
+// back into the mock without deadlocking.
+func (this serviceMockCallsHelper[CT]) Any(pred func(CT) bool) bool {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Any: predicate is nil")
+	}
+	for _, c := range this.All() {
+		if pred(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter returns every recorded call satisfying pred, in invocation order.
+// Returns an empty (non-nil) slice when no call matches. Pred runs after
+// All() returns; pred may safely call back into the mock.
+func (this serviceMockCallsHelper[CT]) Filter(pred func(CT) bool) []CT {
+	if pred == nil {
+		panic("serviceMockCallsHelper.Filter: predicate is nil")
+	}
+	out := []CT{}
+	for _, c := range this.All() {
+		if pred(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ServiceMockCall is satisfied by every per-method <CallType>
+// and by ServiceMockTimelineEntry. Enables HappenedBefore comparisons
+// across concrete call types.
+type ServiceMockCall interface {
+	Global() int
+}
+
+// ServiceMockTimelineEntry records one call across any method in
+// invocation order. Method names the source method; Index is the
+// per-method position at the time the call was recorded; GlobalIndex is
+// monotonically increasing across all methods.
+type ServiceMockTimelineEntry struct {
+	Method      string
+	Index       int
+	GlobalIndex int
+}
+
+// Global returns the global ordering position for this entry.
+func (this ServiceMockTimelineEntry) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this entry was recorded before other.
+func (this ServiceMockTimelineEntry) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
+}
+
 // ServiceMockDoSomethingCall records one call to Service.DoSomething.
 // Index is the 0-based position of this call in the per-method log, useful
 // for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset.
+// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
+// mock-wide position assigned when the call was recorded; see Timeline().
 type ServiceMockDoSomethingCall struct {
-	Index  int
-	Param  ServiceMockDoSomethingParam
-	Return ServiceMockDoSomethingReturn
+	Index       int
+	GlobalIndex int
+	Param       ServiceMockDoSomethingParam
+	Return      ServiceMockDoSomethingReturn
+}
+
+// Global returns the mock-wide ordering position for this call.
+func (this ServiceMockDoSomethingCall) Global() int { return this.GlobalIndex }
+
+// HappenedBefore returns true iff this call was recorded before other.
+func (this ServiceMockDoSomethingCall) HappenedBefore(other ServiceMockCall) bool {
+	return this.GlobalIndex < other.Global()
 }
 
 type ServiceMockDoSomethingParam struct {
@@ -1228,6 +1622,9 @@ type serviceMockDoSomethingCfg struct {
 }
 
 type ServiceMock struct {
+	globalCallCounter int
+	timelineLog       []ServiceMockTimelineEntry
+
 	doSomethingLog []ServiceMockDoSomethingCall
 	doSomethingCfg serviceMockDoSomethingCfg
 }
@@ -1240,13 +1637,23 @@ func NewServiceMock() *ServiceMock {
 }
 
 func (this *ServiceMock) DoSomething() {
+	__mockGlobal := this.globalCallCounter
+	this.globalCallCounter++
 	this.doSomethingLog = append(this.doSomethingLog, ServiceMockDoSomethingCall{
-		Index: len(this.doSomethingLog),
-		Param: ServiceMockDoSomethingParam{},
+		Index:       len(this.doSomethingLog),
+		GlobalIndex: __mockGlobal,
+		Param:       ServiceMockDoSomethingParam{},
+	})
+	this.timelineLog = append(this.timelineLog, ServiceMockTimelineEntry{
+		Method:      "DoSomething",
+		Index:       len(this.doSomethingLog) - 1,
+		GlobalIndex: __mockGlobal,
 	})
 }
 
 func (this *ServiceMock) Reset() {
+	this.globalCallCounter = 0
+	this.timelineLog = nil
 	this.doSomethingLog = nil
 	this.doSomethingCfg = serviceMockDoSomethingCfg{}
 }
@@ -1259,9 +1666,11 @@ func (this *ServiceMock) Calls() serviceMockCalls {
 	return serviceMockCalls{m: this}
 }
 
-// Reset clears every per-method call log on the mock without touching
-// configured returns or installed handlers.
+// Reset clears every per-method call log on the mock and the cross-method
+// timeline, without touching configured returns or installed handlers.
 func (this serviceMockCalls) Reset() {
+	this.m.globalCallCounter = 0
+	this.m.timelineLog = nil
 	this.m.doSomethingLog = nil
 }
 
@@ -1279,6 +1688,34 @@ func (this serviceMockCalls) DoSomething() serviceMockDoSomethingCalls {
 func (this serviceMockCalls) PendingStubs() int {
 	n := 0
 	return n
+}
+
+// Timeline returns a defensive copy of the cross-method call timeline.
+// Each entry names the source method, its per-method index, and a
+// mock-wide GlobalIndex assigned at recording time.
+func (this serviceMockCalls) Timeline() []ServiceMockTimelineEntry {
+	out := make([]ServiceMockTimelineEntry, len(this.m.timelineLog))
+	copy(out, this.m.timelineLog)
+	return out
+}
+
+// AssertOrder calls t.Errorf when the given entries were not recorded in
+// the given order. Adjacent entries with the same GlobalIndex (same call
+// passed twice) are treated as in-order. 0 or 1 entries are a no-op.
+func (this serviceMockCalls) AssertOrder(t ServiceMockVerifyT, entries ...ServiceMockCall) {
+	t.Helper()
+	if len(entries) < 2 {
+		return
+	}
+	prev := entries[0].Global()
+	for i := 1; i < len(entries); i++ {
+		cur := entries[i].Global()
+		if cur < prev {
+			t.Errorf("ServiceMock: AssertOrder violated — entry " + strconv.Itoa(i) + " (global #" + strconv.Itoa(cur) + ") happened before entry " + strconv.Itoa(i-1) + " (global #" + strconv.Itoa(prev) + ")")
+			return
+		}
+		prev = cur
+	}
 }
 
 // ServiceMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
