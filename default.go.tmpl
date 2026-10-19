@@ -151,12 +151,12 @@ func (this {{$method.ConfigMethodType}}) When(pred func({{$method.ParamType}}) b
 	return {{$method.ConfigMethodType}}{this.On.When(func(p any) bool { return pred(p.({{$method.ParamType}})) })}
 }
 
-type {{$method.PerReturnSetterType}} struct{ mockrt.Stub }
+type {{$method.PerReturnSetterType}} struct{ s mockrt.Stub }
 
 func (this {{$method.PerReturnSetterType}}) Return() {{$method.PerReturnSetterType}} { return this }
 {{- range $method.IndividualReturnSetters}}
 func (this {{$method.PerReturnSetterType}}) {{.MethodName}}(value {{.ParamType}}) {{$method.PerReturnSetterType}} {
-	return {{$method.PerReturnSetterType}}{mockrt.Set(this.Stub, func(r *{{$method.ReturnType}}) { r.{{.MethodName}} = value })}
+	return {{$method.PerReturnSetterType}}{mockrt.Set(this.s, func(r *{{$method.ReturnType}}) { r.{{.MethodName}} = value })}
 }
 {{- end}}
 {{else}}

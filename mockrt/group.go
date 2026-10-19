@@ -2,8 +2,8 @@ package mockrt
 
 import "strconv"
 
-// methodState is implemented by every *Method[P, R]; it lets the mock-level
-// operations walk methods of different P and R.
+// methodState is implemented by *Method; it lets the mock-level operations
+// walk every method of a mock.
 type methodState interface {
 	pending() int
 	resetLog()

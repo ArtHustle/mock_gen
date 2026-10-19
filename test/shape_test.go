@@ -290,15 +290,15 @@ func (this serviceMockSendOn) When(pred func(ServiceMockSendParam) bool) service
 	return serviceMockSendOn{this.On.When(func(p any) bool { return pred(p.(ServiceMockSendParam)) })}
 }
 
-type serviceMockSendReturn struct{ mockrt.Stub }
+type serviceMockSendReturn struct{ s mockrt.Stub }
 
 func (this serviceMockSendReturn) Return() serviceMockSendReturn { return this }
 func (this serviceMockSendReturn) Id(value string) serviceMockSendReturn {
-	return serviceMockSendReturn{mockrt.Set(this.Stub, func(r *ServiceMockSendReturn) { r.Id = value })}
+	return serviceMockSendReturn{mockrt.Set(this.s, func(r *ServiceMockSendReturn) { r.Id = value })}
 }
 
 func (this serviceMockSendReturn) Err(value error) serviceMockSendReturn {
-	return serviceMockSendReturn{mockrt.Set(this.Stub, func(r *ServiceMockSendReturn) { r.Err = value })}
+	return serviceMockSendReturn{mockrt.Set(this.s, func(r *ServiceMockSendReturn) { r.Err = value })}
 }
 `, Options{}),
 
@@ -469,15 +469,15 @@ func (this serviceMockSendOn) When(pred func(ServiceMockSendParam) bool) service
 	return serviceMockSendOn{this.On.When(func(p any) bool { return pred(p.(ServiceMockSendParam)) })}
 }
 
-type serviceMockSendReturn struct{ mockrt.Stub }
+type serviceMockSendReturn struct{ s mockrt.Stub }
 
 func (this serviceMockSendReturn) Return() serviceMockSendReturn { return this }
 func (this serviceMockSendReturn) Id(value string) serviceMockSendReturn {
-	return serviceMockSendReturn{mockrt.Set(this.Stub, func(r *ServiceMockSendReturn) { r.Id = value })}
+	return serviceMockSendReturn{mockrt.Set(this.s, func(r *ServiceMockSendReturn) { r.Id = value })}
 }
 
 func (this serviceMockSendReturn) Err(value error) serviceMockSendReturn {
-	return serviceMockSendReturn{mockrt.Set(this.Stub, func(r *ServiceMockSendReturn) { r.Err = value })}
+	return serviceMockSendReturn{mockrt.Set(this.s, func(r *ServiceMockSendReturn) { r.Err = value })}
 }
 `, Options{Async: true}),
 

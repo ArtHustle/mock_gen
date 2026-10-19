@@ -355,7 +355,6 @@ If the source interface declares a method literally named `Calls`, `On`, or `Res
 - `Calls()` and `On()` collisions can be resolved by overriding the entry name via `--inspect-entry NAME` (or `--config-entry NAME`).
 - `Reset()` cannot be overridden — the source interface must be modified.
 - `MockCalls()` and `MockOn()` are the runtime namespaces embedded in the generated `Calls()`/`On()` types, so a source method with either name is rejected too.
-- A return value named `stub` (or `Stub`) is rejected: its per-return setter `Stub(v)` would collide with the `mockrt.Stub` embedded in the setter type. Rename the return value.
 
 ```shell
 # source has `Calls()` method:
@@ -466,9 +465,10 @@ Unreleased: generated code shrinks by roughly 60–70% by moving the shared logi
 - **New dependency**: generated mocks import `github.com/ArtHustle/mock_gen/mockrt`. Add `github.com/ArtHustle/mock_gen` to the consuming module's `go.mod` at the same version as the generator (see Installation).
 - **Unchanged API**: `On().X().ReturnAll/ReturnCustom/Return().<Field>/Once/Always/When/Reset`, `Calls().X().Count/At/Last/All/Reset/PendingStubs/Any/Filter` (plus `WaitForCount/WaitForCall` under `--async`), mock-level `Reset`, `Calls().Reset/PendingStubs/Timeline/AssertOrder/Verify`, `On().Reset`, the `<MockName><Method>Param`, `<MockName><Method>Return` and `<MockName><Method>Call` structs, and the panic and error messages.
 - **Changed, but source-compatible**:
+  - A source package named `mockrt` is imported under a longer alias (e.g. `dummyMockrt`) so it doesn't clash with the runtime import.
   - `<MockName>Call`, `<MockName>TimelineEntry` and `<MockName>VerifyT` are aliases of `mockrt.Call`, `mockrt.TimelineEntry` and `mockrt.T`.
   - `On().X().When(pred)` returns the method's config type scoped to the conditional instead of a separate type with only `Once()`/`Always()`. Those two behave as before; the whole-method operations it now also exposes (`ReturnAll`, `ReturnCustom`, `Return`, `When`, `Reset`) panic on a `When()` handle rather than touching the unconditional config.
-  - The other unexported namespace types are thin typed wrappers that embed `mockrt.Calls`/`AsyncCalls`/`On`/`Stub`, so a few untyped runtime methods are reachable on them too (e.g. `SetAll`, `Custom`).
+  - The other unexported namespace types are thin typed wrappers that embed `mockrt.Calls`/`AsyncCalls`/`On`, so a few untyped runtime methods are reachable on them too (e.g. `SetAll`, `Custom`).
 - **Why the runtime is not generic**: Go compiles every method of an instantiated generic type in each package that uses it, so generic namespace types made test packages that touch many mocks several times more expensive to compile. The runtime works on `any`, and each mock converts at its typed boundary; the only generics are three small helper functions.
 - **Custom-template authors**: two new `MethodData` fields, `StateField` and `CallOfFunc`. The per-mock `CallsHelperType` and the per-method `Cfg*`/`Stub*`/`Log*`/`OnConditionalType` names are still populated for templates that use them, but the default template no longer emits them.
 

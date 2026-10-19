@@ -714,6 +714,33 @@ if count != 100 {
 `, Options{Async: true}, `import syncPkg "sync"`, `import timePkg "time"`, `import stringsPkg "strings"`)
 	})
 
+	It("--async: a panicking predicate releases the lock", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) (id string, err error)
+}`, `
+m := &ServiceMock{}
+m.On().Send().When(func(p ServiceMockSendParam) bool { panic("boom") }).Always().Id("x")
+
+func() {
+	defer func() { recover() }()
+	m.Send("a")
+}()
+
+done := make(chan int)
+go func() { done <- m.Calls().Send().Count() }()
+select {
+case n := <-done:
+	if n != 1 {
+		t.Fatalf("Count() = %d, want 1", n)
+	}
+case <-timePkg.After(timePkg.Second):
+	t.Fatal("mock still locked after a predicate panicked")
+}
+`, Options{Async: true}, `import timePkg "time"`)
+	})
+
 	It("--async: predicate evaluation is race-clean with 100 concurrent calls", func() {
 		runMockBehavior(`package svc
 

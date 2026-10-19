@@ -22,6 +22,7 @@ import (
 	"go/token"
 	"go/types"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -205,7 +206,10 @@ func exportedFieldName(s string) string {
 	return toTitle(stripped)
 }
 
-func assignAliasesToImportPaths(importPackages []*types.Package, currentPkgPath string) map[string]*types.Package {
+// assignAliasesToImportPaths gives each imported package a unique alias.
+// Reserved aliases are names the template itself imports under, so no source
+// package may take them.
+func assignAliasesToImportPaths(importPackages []*types.Package, currentPkgPath string, reserved ...string) map[string]*types.Package {
 	aliases := make(map[string]*types.Package)
 
 	for _, pkg := range importPackages {
@@ -214,6 +218,9 @@ func assignAliasesToImportPaths(importPackages []*types.Package, currentPkgPath 
 
 		for i := len(parts) - 1; i >= 0; i-- {
 			alias = parts[i] + toTitle(alias)
+			if slices.Contains(reserved, alias) {
+				continue
+			}
 			if existing, exists := aliases[alias]; !exists {
 				break
 			} else if strings.HasPrefix(pkg.Path(), currentPkgPath) {
@@ -629,7 +636,11 @@ func (this *generator) collectImports(genRecs []genRec) []*types.Package {
 		this.collectInterfaceImports(rec.iface, &importedPaths)
 	}
 
-	this.importAliasToPath = assignAliasesToImportPaths(importedPaths, this.currentPkg.Path())
+	var reserved []string
+	if this.options.CustomTemplate == "" {
+		reserved = append(reserved, path.Base(RuntimeImportPath))
+	}
+	this.importAliasToPath = assignAliasesToImportPaths(importedPaths, this.currentPkg.Path(), reserved...)
 	for alias, pkg := range this.importAliasToPath {
 		this.importPathToAlias[pkg.Path()] = alias
 	}
@@ -935,15 +946,6 @@ func validateNoEntryCollisions(interfaceName string, methods []MethodData, inspe
 					"Rename the source method to avoid the conflict.",
 				interfaceName, m.Name,
 			)
-		}
-		for _, rf := range m.ReturnFields {
-			if rf.Name == "Stub" {
-				return fmt.Errorf(
-					"interface %s method %s has a return value named %q, which collides with the mockrt.Stub embedded in its per-return setter. "+
-						"Rename the return value to avoid the conflict.",
-					interfaceName, m.Name, rf.Name,
-				)
-			}
 		}
 	}
 	return nil

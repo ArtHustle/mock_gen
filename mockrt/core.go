@@ -66,17 +66,7 @@ func (c *core) call(ref Ref, p any) any {
 	var ret any
 	matched := false
 	if len(c.cfg.conditionals) > 0 {
-		first, second, count := -1, -1, 0
-		for i, cond := range c.cfg.conditionals {
-			if cond.pred(p) {
-				count++
-				if first == -1 {
-					first = i
-				} else if second == -1 {
-					second = i
-				}
-			}
-		}
+		first, second, count := c.match(ref, p)
 		if count >= 2 {
 			ref.unlock()
 			panic(ref.Name + "." + ref.Method + ": call matched " + strconv.Itoa(count) + " When predicates (indices " + strconv.Itoa(first) + " and " + strconv.Itoa(second) + "); refine the predicates or remove the overlap")
@@ -108,6 +98,31 @@ func (c *core) call(ref Ref, p any) any {
 	}
 	ref.unlock()
 	return ret
+}
+
+// match runs every When() predicate against p and reports the first two
+// matching indices and the match count. Callers hold the lock; a panicking
+// predicate releases it so the mock stays usable after a recover.
+func (c *core) match(ref Ref, p any) (first, second, count int) {
+	ok := false
+	defer func() {
+		if !ok {
+			ref.unlock()
+		}
+	}()
+	first, second = -1, -1
+	for i, cond := range c.cfg.conditionals {
+		if cond.pred(p) {
+			count++
+			if first == -1 {
+				first = i
+			} else if second == -1 {
+				second = i
+			}
+		}
+	}
+	ok = true
+	return first, second, count
 }
 
 func (c *conditional) take() (any, bool) {

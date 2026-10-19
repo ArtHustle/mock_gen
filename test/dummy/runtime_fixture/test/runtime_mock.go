@@ -170,11 +170,11 @@ func (this runtimeMockActivateOn) When(pred func(RuntimeMockActivateParam) bool)
 	return runtimeMockActivateOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockActivateParam)) })}
 }
 
-type runtimeMockActivateReturn struct{ mockrt.Stub }
+type runtimeMockActivateReturn struct{ s mockrt.Stub }
 
 func (this runtimeMockActivateReturn) Return() runtimeMockActivateReturn { return this }
 func (this runtimeMockActivateReturn) Error(value error) runtimeMockActivateReturn {
-	return runtimeMockActivateReturn{mockrt.Set(this.Stub, func(r *RuntimeMockActivateReturn) { r.Error = value })}
+	return runtimeMockActivateReturn{mockrt.Set(this.s, func(r *RuntimeMockActivateReturn) { r.Error = value })}
 }
 
 type RuntimeMockCloseParam struct{}
@@ -265,11 +265,11 @@ func (this runtimeMockCloseOn) When(pred func(RuntimeMockCloseParam) bool) runti
 	return runtimeMockCloseOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockCloseParam)) })}
 }
 
-type runtimeMockCloseReturn struct{ mockrt.Stub }
+type runtimeMockCloseReturn struct{ s mockrt.Stub }
 
 func (this runtimeMockCloseReturn) Return() runtimeMockCloseReturn { return this }
 func (this runtimeMockCloseReturn) Error(value error) runtimeMockCloseReturn {
-	return runtimeMockCloseReturn{mockrt.Set(this.Stub, func(r *RuntimeMockCloseReturn) { r.Error = value })}
+	return runtimeMockCloseReturn{mockrt.Set(this.s, func(r *RuntimeMockCloseReturn) { r.Error = value })}
 }
 
 type RuntimeMockFetchParam struct {
@@ -367,19 +367,19 @@ func (this runtimeMockFetchOn) When(pred func(RuntimeMockFetchParam) bool) runti
 	return runtimeMockFetchOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockFetchParam)) })}
 }
 
-type runtimeMockFetchReturn struct{ mockrt.Stub }
+type runtimeMockFetchReturn struct{ s mockrt.Stub }
 
 func (this runtimeMockFetchReturn) Return() runtimeMockFetchReturn { return this }
 func (this runtimeMockFetchReturn) Events(value []runtime_fixture.Event) runtimeMockFetchReturn {
-	return runtimeMockFetchReturn{mockrt.Set(this.Stub, func(r *RuntimeMockFetchReturn) { r.Events = value })}
+	return runtimeMockFetchReturn{mockrt.Set(this.s, func(r *RuntimeMockFetchReturn) { r.Events = value })}
 }
 
 func (this runtimeMockFetchReturn) Total(value int) runtimeMockFetchReturn {
-	return runtimeMockFetchReturn{mockrt.Set(this.Stub, func(r *RuntimeMockFetchReturn) { r.Total = value })}
+	return runtimeMockFetchReturn{mockrt.Set(this.s, func(r *RuntimeMockFetchReturn) { r.Total = value })}
 }
 
 func (this runtimeMockFetchReturn) Err(value error) runtimeMockFetchReturn {
-	return runtimeMockFetchReturn{mockrt.Set(this.Stub, func(r *RuntimeMockFetchReturn) { r.Err = value })}
+	return runtimeMockFetchReturn{mockrt.Set(this.s, func(r *RuntimeMockFetchReturn) { r.Err = value })}
 }
 
 type RuntimeMockHistoryParam struct {
@@ -472,11 +472,11 @@ func (this runtimeMockHistoryOn) When(pred func(RuntimeMockHistoryParam) bool) r
 	return runtimeMockHistoryOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockHistoryParam)) })}
 }
 
-type runtimeMockHistoryReturn struct{ mockrt.Stub }
+type runtimeMockHistoryReturn struct{ s mockrt.Stub }
 
 func (this runtimeMockHistoryReturn) Return() runtimeMockHistoryReturn { return this }
 func (this runtimeMockHistoryReturn) EventArr(value []runtime_fixture.Event) runtimeMockHistoryReturn {
-	return runtimeMockHistoryReturn{mockrt.Set(this.Stub, func(r *RuntimeMockHistoryReturn) { r.EventArr = value })}
+	return runtimeMockHistoryReturn{mockrt.Set(this.s, func(r *RuntimeMockHistoryReturn) { r.EventArr = value })}
 }
 
 type RuntimeMockPublishParam struct {
@@ -574,15 +574,15 @@ func (this runtimeMockPublishOn) When(pred func(RuntimeMockPublishParam) bool) r
 	return runtimeMockPublishOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockPublishParam)) })}
 }
 
-type runtimeMockPublishReturn struct{ mockrt.Stub }
+type runtimeMockPublishReturn struct{ s mockrt.Stub }
 
 func (this runtimeMockPublishReturn) Return() runtimeMockPublishReturn { return this }
 func (this runtimeMockPublishReturn) Event(value runtime_fixture.Event) runtimeMockPublishReturn {
-	return runtimeMockPublishReturn{mockrt.Set(this.Stub, func(r *RuntimeMockPublishReturn) { r.Event = value })}
+	return runtimeMockPublishReturn{mockrt.Set(this.s, func(r *RuntimeMockPublishReturn) { r.Event = value })}
 }
 
 func (this runtimeMockPublishReturn) Error(value error) runtimeMockPublishReturn {
-	return runtimeMockPublishReturn{mockrt.Set(this.Stub, func(r *RuntimeMockPublishReturn) { r.Error = value })}
+	return runtimeMockPublishReturn{mockrt.Set(this.s, func(r *RuntimeMockPublishReturn) { r.Error = value })}
 }
 
 type RuntimeMockStatsParam struct{}
@@ -677,19 +677,19 @@ func (this runtimeMockStatsOn) When(pred func(RuntimeMockStatsParam) bool) runti
 	return runtimeMockStatsOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockStatsParam)) })}
 }
 
-type runtimeMockStatsReturn struct{ mockrt.Stub }
+type runtimeMockStatsReturn struct{ s mockrt.Stub }
 
 func (this runtimeMockStatsReturn) Return() runtimeMockStatsReturn { return this }
 func (this runtimeMockStatsReturn) Active(value int) runtimeMockStatsReturn {
-	return runtimeMockStatsReturn{mockrt.Set(this.Stub, func(r *RuntimeMockStatsReturn) { r.Active = value })}
+	return runtimeMockStatsReturn{mockrt.Set(this.s, func(r *RuntimeMockStatsReturn) { r.Active = value })}
 }
 
 func (this runtimeMockStatsReturn) Queued(value int) runtimeMockStatsReturn {
-	return runtimeMockStatsReturn{mockrt.Set(this.Stub, func(r *RuntimeMockStatsReturn) { r.Queued = value })}
+	return runtimeMockStatsReturn{mockrt.Set(this.s, func(r *RuntimeMockStatsReturn) { r.Queued = value })}
 }
 
 func (this runtimeMockStatsReturn) Err(value error) runtimeMockStatsReturn {
-	return runtimeMockStatsReturn{mockrt.Set(this.Stub, func(r *RuntimeMockStatsReturn) { r.Err = value })}
+	return runtimeMockStatsReturn{mockrt.Set(this.s, func(r *RuntimeMockStatsReturn) { r.Err = value })}
 }
 
 type RuntimeMockSubscribeParam struct {
@@ -787,13 +787,13 @@ func (this runtimeMockSubscribeOn) When(pred func(RuntimeMockSubscribeParam) boo
 	return runtimeMockSubscribeOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockSubscribeParam)) })}
 }
 
-type runtimeMockSubscribeReturn struct{ mockrt.Stub }
+type runtimeMockSubscribeReturn struct{ s mockrt.Stub }
 
 func (this runtimeMockSubscribeReturn) Return() runtimeMockSubscribeReturn { return this }
 func (this runtimeMockSubscribeReturn) Cancel(value func()) runtimeMockSubscribeReturn {
-	return runtimeMockSubscribeReturn{mockrt.Set(this.Stub, func(r *RuntimeMockSubscribeReturn) { r.Cancel = value })}
+	return runtimeMockSubscribeReturn{mockrt.Set(this.s, func(r *RuntimeMockSubscribeReturn) { r.Cancel = value })}
 }
 
 func (this runtimeMockSubscribeReturn) Err(value error) runtimeMockSubscribeReturn {
-	return runtimeMockSubscribeReturn{mockrt.Set(this.Stub, func(r *RuntimeMockSubscribeReturn) { r.Err = value })}
+	return runtimeMockSubscribeReturn{mockrt.Set(this.s, func(r *RuntimeMockSubscribeReturn) { r.Err = value })}
 }

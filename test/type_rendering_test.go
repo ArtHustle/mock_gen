@@ -469,6 +469,7 @@ type Service interface {
 
 	// --- async-gated emission ---
 
+	// The --async shape (mockrt.AsyncCalls, typed WaitForCall) is pinned in shape_test.go.
 	It("WaitForCount and WaitForCall methods are NOT emitted without --async", func() {
 		out, err := GenerateMockContentWithOptions(`package pkg
 
@@ -476,28 +477,12 @@ type Service interface {
 	Send(x int) error
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("type serviceMockSendCalls struct{ mockrt.Calls }"))
 		Expect(out).NotTo(ContainSubstring("mockrt.AsyncCalls"),
 			"WaitForCount must only be reachable under --async")
 		Expect(out).NotTo(ContainSubstring(") WaitForCall("),
 			"WaitForCall must only be emitted under --async")
 		Expect(out).NotTo(ContainSubstring(`"time"`))
 		Expect(out).NotTo(ContainSubstring(`"errors"`))
-	})
-
-	It("WaitForCount and WaitForCall ARE reachable with --async", func() {
-		out, err := GenerateMockContentWithOptions(`package pkg
-
-type Service interface {
-	Send(x int) error
-	Close() error
-}`, Options{Async: true})
-		Expect(err).NotTo(HaveOccurred())
-		// WaitForCount is promoted from mockrt.AsyncCalls; WaitForCall is
-		// typed to the method's Call struct.
-		Expect(out).To(ContainSubstring("type serviceMockSendCalls struct{ mockrt.AsyncCalls }"))
-		Expect(out).To(ContainSubstring("func (this serviceMockSendCalls) WaitForCall(pred func(ServiceMockSendCall) bool, timeout time.Duration) error"))
-		Expect(out).To(ContainSubstring("func (this serviceMockCloseCalls) WaitForCall(pred func(ServiceMockCloseCall) bool, timeout time.Duration) error"))
 	})
 
 	// --- per-method config setter emission ---
@@ -566,13 +551,27 @@ type Service interface {
 		Expect(err).To(MatchError(ContainSubstring(`declares method "MockCalls" which collides with the runtime namespace`)))
 	})
 
-	It("rejects a return value named Stub, which would collide with the setter's embedded mockrt.Stub", func() {
-		_, err := GenerateMockContentWithOptions(`package pkg
+	It("a return value named Stub gets its own per-return setter", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
 
 type Service interface {
 	Find() (stub string, err error)
 }`, Options{})
-		Expect(err).To(MatchError(ContainSubstring(`has a return value named "Stub"`)))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("func (this serviceMockFindReturn) Stub(value string) serviceMockFindReturn"))
+	})
+
+	It("a source package named mockrt is aliased away from the runtime import", func() {
+		out, err := GenerateMockContentWithOptions(`package pkg
+
+import "github.com/ArtHustle/mock_gen/test/dummy/mockrt"
+
+type Service interface {
+	Get() mockrt.Thing
+}`, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring(`dummyMockrt "github.com/ArtHustle/mock_gen/test/dummy/mockrt"`))
+		Expect(out).To(ContainSubstring("Get() dummyMockrt.Thing"))
 	})
 
 	It("non-empty inline interface renders methods inline", func() {
