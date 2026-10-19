@@ -956,11 +956,7 @@ func runMockBehavior(source, harnessCode string, opts Options, extras ...string)
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() { os.RemoveAll(tempDir) })
 
-	Expect(os.WriteFile(
-		filepath.Join(tempDir, "go.mod"),
-		[]byte("module behavior\n\ngo 1.23\n"),
-		0644,
-	)).To(Succeed())
+	writeBuildableGoMod(tempDir, "behavior")
 
 	srcPath := filepath.Join(tempDir, "src.go")
 	Expect(os.WriteFile(srcPath, []byte(source), 0644)).To(Succeed())

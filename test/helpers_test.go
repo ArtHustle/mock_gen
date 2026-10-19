@@ -1,6 +1,8 @@
 package test
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -74,4 +76,30 @@ func extractServiceMockMethodSignatures(src string) []string {
 		}
 	}
 	return sigs
+}
+
+// writeBuildableGoMod writes a go.mod (and go.sum) to dir for a throwaway
+// module whose generated mocks are compiled. Generated mocks import mockrt,
+// so the module requires mock_gen and replaces it with this checkout; the go
+// directive and go.sum are taken from this checkout so the replaced module
+// resolves offline.
+func writeBuildableGoMod(dir, module string) {
+	GinkgoHelper()
+	root, err := filepath.Abs("..")
+	Expect(err).NotTo(HaveOccurred())
+	rootMod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	Expect(err).NotTo(HaveOccurred())
+	goLine := ""
+	for _, line := range strings.Split(string(rootMod), "\n") {
+		if strings.HasPrefix(line, "go ") {
+			goLine = line
+		}
+	}
+	mod := "module " + module + "\n\n" + goLine + "\n\n" +
+		"require github.com/ArtHustle/mock_gen v0.0.0\n\n" +
+		"replace github.com/ArtHustle/mock_gen => " + root + "\n"
+	Expect(os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0644)).To(Succeed())
+	sum, err := os.ReadFile(filepath.Join(root, "go.sum"))
+	Expect(err).NotTo(HaveOccurred())
+	Expect(os.WriteFile(filepath.Join(dir, "go.sum"), sum, 0644)).To(Succeed())
 }

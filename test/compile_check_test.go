@@ -133,11 +133,7 @@ type Runtime interface {
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { os.RemoveAll(tempDir) })
 
-		Expect(os.WriteFile(
-			filepath.Join(tempDir, "go.mod"),
-			[]byte("module multimock\n\ngo 1.23\n"),
-			0644,
-		)).To(Succeed())
+		writeBuildableGoMod(tempDir, "multimock")
 
 		aPath := filepath.Join(tempDir, "a.go")
 		Expect(os.WriteFile(aPath, []byte(`package src
@@ -178,11 +174,7 @@ func compileGeneratedMock(source string, opts Options) {
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() { os.RemoveAll(tempDir) })
 
-	Expect(os.WriteFile(
-		filepath.Join(tempDir, "go.mod"),
-		[]byte("module compile_check\n\ngo 1.23\n"),
-		0644,
-	)).To(Succeed())
+	writeBuildableGoMod(tempDir, "compile_check")
 
 	srcPath := filepath.Join(tempDir, "src.go")
 	Expect(os.WriteFile(srcPath, []byte(source), 0644)).To(Succeed())

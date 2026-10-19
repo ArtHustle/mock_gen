@@ -583,6 +583,40 @@ cond.Once().Return().Id("doomed").Err(nil)
 `, Options{}, `import stringsPkg "strings"`)
 	})
 
+	// The When() handle shares the per-method config type, so it also
+	// exposes the whole-method operations; they must not silently rewrite
+	// the unconditional config.
+	It("Whole-method operations on a When() handle panic", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) (id string, err error)
+}`, `
+m := &ServiceMock{}
+cond := m.On().Send().When(func(p ServiceMockSendParam) bool { return true })
+for name, op := range map[string]func(){
+	"ReturnAll()":    func() { cond.ReturnAll("x", nil) },
+	"ReturnCustom()": func() { cond.ReturnCustom(func(string) (string, error) { return "", nil }) },
+	"Return()":       func() { cond.Return() },
+	"When()":         func() { cond.When(func(ServiceMockSendParam) bool { return true }) },
+	"Reset()":        func() { cond.Reset() },
+} {
+	func() {
+		defer func() {
+			msg, _ := recover().(string)
+			if msg != "ServiceMock.Send: "+name+" is not available on a When() handle; arm it with Once() or Always()" {
+				t.Errorf("%s: panic = %q", name, msg)
+			}
+		}()
+		op()
+	}()
+}
+if got := m.Calls().Send().PendingStubs(); got != 0 {
+	t.Fatalf("PendingStubs() = %d, want 0", got)
+}
+`, Options{})
+	})
+
 	It("m.On().Reset() drains conditionals across all methods (config-wide reset)", func() {
 		runMockBehavior(`package svc
 

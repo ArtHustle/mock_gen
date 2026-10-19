@@ -48,6 +48,11 @@ const (
 	structMockSuffix = "Mock"
 )
 
+// RuntimeImportPath is the import path of the runtime package that mocks
+// rendered by the default template delegate to. It lives in this module, so
+// one pinned mock_gen version covers both the generator and the runtime.
+const RuntimeImportPath = "github.com/ArtHustle/mock_gen/mockrt"
+
 func deducePackagePath(filePath string) (string, error) {
 	absFilePath, err := filepath.Abs(filePath)
 	if err != nil {
@@ -366,6 +371,13 @@ type MethodData struct {
 	// method return, in declaration order.
 	ReturnFields []FieldData
 
+	// StateField is the unexported mockrt.Method field on the mock struct
+	// that holds this method's call log and configured returns
+	// (e.g. "sendMethod"). Used by the default template.
+	StateField string
+	// CallOfFunc is the unexported function converting a mockrt.Rec to
+	// CallType (e.g. "serviceMockSendCallOf"). Used by the default template.
+	CallOfFunc string
 	// LogField is the unexported `[]<CallType>` slice field name on the
 	// mock struct (e.g. "sendLog").
 	LogField string
@@ -524,8 +536,28 @@ func generateMockFromAST(
 	if err != nil {
 		return "", fmt.Errorf("error formatting generated code: %w", err)
 	}
+	if opts.CustomTemplate == "" {
+		formattedBytes = separateMultilineDecls(formattedBytes)
+	}
 
 	return string(formattedBytes), nil
+}
+
+// separateMultilineDecls puts an empty line after every multi-line
+// top-level declaration, as gofumpt requires. The default template keeps
+// short accessors on adjacent lines, but gofmt expands a one-line function
+// whose header and body exceed its line budget, which depends on the mock
+// and method names.
+func separateMultilineDecls(src []byte) []byte {
+	lines := strings.Split(string(src), "\n")
+	out := make([]string, 0, len(lines))
+	for i, line := range lines {
+		out = append(out, line)
+		if (line == "}" || line == ")") && i+1 < len(lines) && lines[i+1] != "" {
+			out = append(out, "")
+		}
+	}
+	return []byte(strings.Join(out, "\n"))
 }
 
 type genRec struct {
@@ -740,20 +772,15 @@ func (this *generator) collectImportsData(importPackages []*types.Package, hasIn
 
 	if this.options.Async {
 		stdImports = append(stdImports, strconv.Quote("sync"))
-		// WaitForCount / WaitForCall (emitted only under --async by the
-		// default template) use time.Now / time.Sleep / errors.New, and
-		// WaitForCall uses slices.ContainsFunc.
-		// Custom templates manage their own imports.
-		if this.options.CustomTemplate == "" {
-			stdImports = append(stdImports, strconv.Quote("errors"))
-			stdImports = append(stdImports, strconv.Quote("slices"))
+		// WaitForCall (default template, --async only) takes a time.Duration.
+		if hasInterfaces && this.options.CustomTemplate == "" {
 			stdImports = append(stdImports, strconv.Quote("time"))
 		}
 	}
-	// callIndex (emitted per mock by the default template) uses strconv.Itoa
-	// for panic messages. Custom templates manage their own imports.
+	// The default template delegates to the runtime package. Custom
+	// templates manage their own imports.
 	if hasInterfaces && this.options.CustomTemplate == "" {
-		stdImports = append(stdImports, strconv.Quote("strconv"))
+		nonStdImports = append(nonStdImports, strconv.Quote(RuntimeImportPath))
 	}
 
 	for _, pkg := range importPackages {
@@ -896,12 +923,27 @@ func validateNoEntryCollisions(interfaceName string, methods []MethodData, inspe
 					"Override the entry name with Options.ConfigEntry (CLI: --config-entry NAME).",
 				interfaceName, m.Name,
 			)
+		case "MockCalls", "MockOn":
+			return fmt.Errorf(
+				"interface %s declares method %q which collides with the runtime namespace embedded in the generated mock. "+
+					"Rename the source method to avoid the conflict.",
+				interfaceName, m.Name,
+			)
 		case "Reset":
 			return fmt.Errorf(
 				"interface %s declares method %q which collides with the mock-level Reset method. "+
 					"Rename the source method to avoid the conflict.",
 				interfaceName, m.Name,
 			)
+		}
+		for _, rf := range m.ReturnFields {
+			if rf.Name == "Stub" {
+				return fmt.Errorf(
+					"interface %s method %s has a return value named %q, which collides with the mockrt.Stub embedded in its per-return setter. "+
+						"Rename the return value to avoid the conflict.",
+					interfaceName, m.Name, rf.Name,
+				)
+			}
 		}
 	}
 	return nil
@@ -917,6 +959,8 @@ func (this *generator) collectMethodData(method *types.Func, mockName string) Me
 		CallType:          prefix + "Call",
 		ParamType:         prefix + "Param",
 		ReturnType:        prefix + "Return",
+		StateField:        methodLower + "Method",
+		CallOfFunc:        unexportedTypeName(prefix + "CallOf"),
 		LogField:          methodLower + "Log",
 		CfgField:          methodLower + "Cfg",
 		CfgType:           strings.ToLower(mockName[0:1]) + mockName[1:] + method.Name() + "Cfg",

@@ -4,175 +4,79 @@ package test
 
 import (
 	"context"
-	"errors"
-	"slices"
-	"strconv"
 	"sync"
 	"time"
 
+	"github.com/ArtHustle/mock_gen/mockrt"
 	runtime_fixture "github.com/ArtHustle/mock_gen/test/dummy/runtime_fixture"
 )
 
-type runtimeMockCallsHelper[CT any] struct {
-	mu          *sync.Mutex
-	log         *[]CT
-	pendingFn   func() int
-	indexer     func(length, i int) int
-	indexGetter func(CT) int
+// RuntimeMock implements Runtime. Inspect recorded calls through
+// Calls() and configure returns through On().
+type RuntimeMock struct {
+	mu              sync.Mutex
+	rt              mockrt.Mock
+	activateMethod  mockrt.Method
+	closeMethod     mockrt.Method
+	fetchMethod     mockrt.Method
+	historyMethod   mockrt.Method
+	publishMethod   mockrt.Method
+	statsMethod     mockrt.Method
+	subscribeMethod mockrt.Method
 }
 
-// Count returns the number of recorded calls.
-func (this runtimeMockCallsHelper[CT]) Count() int {
-	this.mu.Lock()
-	defer this.mu.Unlock()
-	return len(*this.log)
+// NewRuntimeMock returns a zero-valued RuntimeMock. Equivalent
+// to &RuntimeMock{}; provided as a consistent entry point that may
+// initialize internal state in future versions.
+func NewRuntimeMock() *RuntimeMock {
+	return &RuntimeMock{}
 }
 
-// At returns the i-th recorded call. Negative i counts from the end.
-// Panics on out-of-range with a message that surfaces both the input
-// and the log length.
-func (this runtimeMockCallsHelper[CT]) At(i int) CT {
-	this.mu.Lock()
-	defer this.mu.Unlock()
-	return (*this.log)[this.indexer(len(*this.log), i)]
+type (
+	RuntimeMockCall          = mockrt.Call
+	RuntimeMockTimelineEntry = mockrt.TimelineEntry
+	RuntimeMockVerifyT       = mockrt.T
+)
+
+func (this *RuntimeMock) ref(method string) mockrt.Ref {
+	return mockrt.Ref{Mock: &this.rt, Mu: &this.mu, Name: "RuntimeMock", Method: method}
 }
 
-// Last is sugar for At(-1).
-func (this runtimeMockCallsHelper[CT]) Last() CT {
-	return this.At(-1)
+func (this *RuntimeMock) group() mockrt.Group {
+	return mockrt.Group{Ref: this.ref(""), Methods: []mockrt.Named{
+		{Name: "Activate", Method: &this.activateMethod},
+		{Name: "Close", Method: &this.closeMethod},
+		{Name: "Fetch", Method: &this.fetchMethod},
+		{Name: "History", Method: &this.historyMethod},
+		{Name: "Publish", Method: &this.publishMethod},
+		{Name: "Stats", Method: &this.statsMethod},
+		{Name: "Subscribe", Method: &this.subscribeMethod},
+	}}
 }
 
-// All returns a defensive copy of the full call log.
-func (this runtimeMockCallsHelper[CT]) All() []CT {
-	this.mu.Lock()
-	defer this.mu.Unlock()
-	out := make([]CT, len(*this.log))
-	copy(out, *this.log)
-	return out
+// Reset clears every call log, the timeline and every configured return.
+func (this *RuntimeMock) Reset() { this.group().Reset() }
+
+type runtimeMockCalls struct {
+	mockrt.MockCalls
+	m *RuntimeMock
 }
 
-// Reset clears the call log.
-func (this runtimeMockCallsHelper[CT]) Reset() {
-	this.mu.Lock()
-	defer this.mu.Unlock()
-	*this.log = nil
+// Calls returns the inspection namespace — one method per
+// interface method, each returning per-call records of Runtime.
+func (this *RuntimeMock) Calls() runtimeMockCalls {
+	return runtimeMockCalls{this.group().MockCalls(), this}
 }
 
-// PendingStubs returns the number of unconsumed Once() stub entries.
-// Returns 0 for methods with no return values.
-func (this runtimeMockCallsHelper[CT]) PendingStubs() int {
-	this.mu.Lock()
-	defer this.mu.Unlock()
-	return this.pendingFn()
+type runtimeMockOn struct {
+	mockrt.MockOn
+	m *RuntimeMock
 }
 
-// Any returns true iff at least one recorded call satisfies pred.
-// Pred runs after All() returns (no lock held); pred may safely call
-// back into the mock without deadlocking.
-func (this runtimeMockCallsHelper[CT]) Any(pred func(CT) bool) bool {
-	if pred == nil {
-		panic("runtimeMockCallsHelper.Any: predicate is nil")
-	}
-	for _, c := range this.All() {
-		if pred(c) {
-			return true
-		}
-	}
-	return false
-}
-
-// Filter returns every recorded call satisfying pred, in invocation order.
-// Returns an empty (non-nil) slice when no call matches. Pred runs after
-// All() returns; pred may safely call back into the mock.
-func (this runtimeMockCallsHelper[CT]) Filter(pred func(CT) bool) []CT {
-	if pred == nil {
-		panic("runtimeMockCallsHelper.Filter: predicate is nil")
-	}
-	out := []CT{}
-	for _, c := range this.All() {
-		if pred(c) {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// WaitForCount blocks until at least n calls have been recorded, or until
-// timeout elapses. Returns nil on success, an error describing the current
-// count on timeout. Polls every 1ms.
-//
-// Implemented in terms of WaitForCall with an Index-based predicate; the
-// timeout error is rebuilt so it surfaces n and the current count.
-func (this runtimeMockCallsHelper[CT]) WaitForCount(n int, timeout time.Duration) error {
-	if n <= 0 {
-		return nil
-	}
-	if err := this.WaitForCall(func(c CT) bool { return this.indexGetter(c) >= n-1 }, timeout); err != nil {
-		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
-	}
-	return nil
-}
-
-// WaitForCall blocks until at least one recorded call satisfies the
-// predicate, or until timeout elapses. Returns nil on success, an error on
-// timeout. Polls every 1ms; on each poll, scans every recorded call from
-// oldest to newest.
-func (this runtimeMockCallsHelper[CT]) WaitForCall(predicate func(CT) bool, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if slices.ContainsFunc(this.All(), predicate) {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-// RuntimeMockCall is satisfied by every per-method <CallType>
-// and by RuntimeMockTimelineEntry. Enables HappenedBefore comparisons
-// across concrete call types.
-type RuntimeMockCall interface {
-	Global() int
-}
-
-// RuntimeMockTimelineEntry records one call across any method in
-// invocation order. Method names the source method; Index is the
-// per-method position at the time the call was recorded; GlobalIndex is
-// monotonically increasing across all methods.
-type RuntimeMockTimelineEntry struct {
-	Method      string
-	Index       int
-	GlobalIndex int
-}
-
-// Global returns the global ordering position for this entry.
-func (this RuntimeMockTimelineEntry) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this entry was recorded before other.
-func (this RuntimeMockTimelineEntry) HappenedBefore(other RuntimeMockCall) bool {
-	return this.GlobalIndex < other.Global()
-}
-
-// RuntimeMockActivateCall records one call to Runtime.Activate.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
-type RuntimeMockActivateCall struct {
-	Index       int
-	GlobalIndex int
-	Param       RuntimeMockActivateParam
-	Return      RuntimeMockActivateReturn
-}
-
-// Global returns the mock-wide ordering position for this call.
-func (this RuntimeMockActivateCall) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this call was recorded before other.
-func (this RuntimeMockActivateCall) HappenedBefore(other RuntimeMockCall) bool {
-	return this.GlobalIndex < other.Global()
+// On returns the configuration namespace — one method per
+// interface method, each returning the per-method config object.
+func (this *RuntimeMock) On() runtimeMockOn {
+	return runtimeMockOn{this.group().MockOn(), this}
 }
 
 type RuntimeMockActivateParam struct {
@@ -184,40 +88,102 @@ type RuntimeMockActivateReturn struct {
 	Error error
 }
 
-// runtimeMockActivateStub holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type runtimeMockActivateStub struct {
-	error error
+// RuntimeMockActivateCall records one call to Runtime.Activate.
+type RuntimeMockActivateCall struct {
+	Index       int
+	GlobalIndex int
+	Param       RuntimeMockActivateParam
+	Return      RuntimeMockActivateReturn
 }
 
-// runtimeMockActivateConditional is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type runtimeMockActivateConditional struct {
-	pred       func(RuntimeMockActivateParam) bool
-	stubQueue  []*runtimeMockActivateStub
-	alwaysStub *runtimeMockActivateStub
+func (this RuntimeMockActivateCall) Global() int { return this.GlobalIndex }
+func (this RuntimeMockActivateCall) HappenedBefore(other RuntimeMockCall) bool {
+	return this.GlobalIndex < other.Global()
 }
 
-type runtimeMockActivateCfg struct {
-	sticky       runtimeMockActivateStub
-	stickySet    bool
-	stubQueue    []*runtimeMockActivateStub
-	alwaysStub   *runtimeMockActivateStub
-	conditionals []*runtimeMockActivateConditional
-	handlerSet   bool
+func runtimeMockActivateCallOf(r mockrt.Rec) RuntimeMockActivateCall {
+	ret, _ := r.Return.(RuntimeMockActivateReturn)
+	return RuntimeMockActivateCall{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.(RuntimeMockActivateParam), Return: ret}
+}
 
-	handler func(context.Context, *runtime_fixture.Trigger) error
+func (this *RuntimeMock) Activate(ctx context.Context, t *runtime_fixture.Trigger) error {
+	__mockR, _ := this.activateMethod.Call(this.ref("Activate"), RuntimeMockActivateParam{Ctx: ctx, T: t}).(RuntimeMockActivateReturn)
+	return __mockR.Error
+}
+
+func (this runtimeMockCalls) Activate() runtimeMockActivateCalls {
+	return runtimeMockActivateCalls{this.m.activateMethod.AsyncCalls(this.m.ref("Activate"))}
+}
+
+type runtimeMockActivateCalls struct{ mockrt.AsyncCalls }
+
+func (this runtimeMockActivateCalls) At(i int) RuntimeMockActivateCall {
+	return runtimeMockActivateCallOf(this.AsyncCalls.At(i))
+}
+
+func (this runtimeMockActivateCalls) Last() RuntimeMockActivateCall { return this.At(-1) }
+func (this runtimeMockActivateCalls) All() []RuntimeMockActivateCall {
+	return mockrt.Map(this.AsyncCalls.All(), runtimeMockActivateCallOf)
+}
+
+func (this runtimeMockActivateCalls) Any(pred func(RuntimeMockActivateCall) bool) bool {
+	return this.AsyncCalls.Any(mockrt.Pred(pred, runtimeMockActivateCallOf))
+}
+
+func (this runtimeMockActivateCalls) Filter(pred func(RuntimeMockActivateCall) bool) []RuntimeMockActivateCall {
+	return mockrt.Map(this.AsyncCalls.Filter(mockrt.Pred(pred, runtimeMockActivateCallOf)), runtimeMockActivateCallOf)
+}
+
+func (this runtimeMockActivateCalls) WaitForCall(pred func(RuntimeMockActivateCall) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, runtimeMockActivateCallOf), timeout)
+}
+
+func (this runtimeMockOn) Activate() runtimeMockActivateOn {
+	return runtimeMockActivateOn{this.m.activateMethod.On(this.m.ref("Activate"))}
+}
+
+type runtimeMockActivateOn struct{ mockrt.On }
+
+func (this runtimeMockActivateOn) ReturnAll(error error) {
+	this.SetAll(RuntimeMockActivateReturn{Error: error})
+}
+
+func (this runtimeMockActivateOn) ReturnCustom(value func(context.Context, *runtime_fixture.Trigger) error) {
+	this.Custom(value != nil, func(p any) any {
+		return RuntimeMockActivateReturn{Error: value(p.(RuntimeMockActivateParam).Ctx, p.(RuntimeMockActivateParam).T)}
+	})
+}
+
+func (this runtimeMockActivateOn) Return() runtimeMockActivateReturn {
+	return runtimeMockActivateReturn{this.On.Return()}
+}
+
+func (this runtimeMockActivateOn) Once() runtimeMockActivateReturn {
+	return runtimeMockActivateReturn{this.On.Once()}
+}
+
+func (this runtimeMockActivateOn) Always() runtimeMockActivateReturn {
+	return runtimeMockActivateReturn{this.On.Always()}
+}
+
+func (this runtimeMockActivateOn) When(pred func(RuntimeMockActivateParam) bool) runtimeMockActivateOn {
+	return runtimeMockActivateOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockActivateParam)) })}
+}
+
+type runtimeMockActivateReturn struct{ mockrt.Stub }
+
+func (this runtimeMockActivateReturn) Return() runtimeMockActivateReturn { return this }
+func (this runtimeMockActivateReturn) Error(value error) runtimeMockActivateReturn {
+	return runtimeMockActivateReturn{mockrt.Set(this.Stub, func(r *RuntimeMockActivateReturn) { r.Error = value })}
+}
+
+type RuntimeMockCloseParam struct{}
+
+type RuntimeMockCloseReturn struct {
+	Error error
 }
 
 // RuntimeMockCloseCall records one call to Runtime.Close.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
 type RuntimeMockCloseCall struct {
 	Index       int
 	GlobalIndex int
@@ -225,68 +191,85 @@ type RuntimeMockCloseCall struct {
 	Return      RuntimeMockCloseReturn
 }
 
-// Global returns the mock-wide ordering position for this call.
 func (this RuntimeMockCloseCall) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this call was recorded before other.
 func (this RuntimeMockCloseCall) HappenedBefore(other RuntimeMockCall) bool {
 	return this.GlobalIndex < other.Global()
 }
 
-type RuntimeMockCloseParam struct {
+func runtimeMockCloseCallOf(r mockrt.Rec) RuntimeMockCloseCall {
+	ret, _ := r.Return.(RuntimeMockCloseReturn)
+	return RuntimeMockCloseCall{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.(RuntimeMockCloseParam), Return: ret}
 }
 
-type RuntimeMockCloseReturn struct {
-	Error error
+func (this *RuntimeMock) Close() error {
+	__mockR, _ := this.closeMethod.Call(this.ref("Close"), RuntimeMockCloseParam{}).(RuntimeMockCloseReturn)
+	return __mockR.Error
 }
 
-// runtimeMockCloseStub holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type runtimeMockCloseStub struct {
-	error error
+func (this runtimeMockCalls) Close() runtimeMockCloseCalls {
+	return runtimeMockCloseCalls{this.m.closeMethod.AsyncCalls(this.m.ref("Close"))}
 }
 
-// runtimeMockCloseConditional is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type runtimeMockCloseConditional struct {
-	pred       func(RuntimeMockCloseParam) bool
-	stubQueue  []*runtimeMockCloseStub
-	alwaysStub *runtimeMockCloseStub
+type runtimeMockCloseCalls struct{ mockrt.AsyncCalls }
+
+func (this runtimeMockCloseCalls) At(i int) RuntimeMockCloseCall {
+	return runtimeMockCloseCallOf(this.AsyncCalls.At(i))
 }
 
-type runtimeMockCloseCfg struct {
-	sticky       runtimeMockCloseStub
-	stickySet    bool
-	stubQueue    []*runtimeMockCloseStub
-	alwaysStub   *runtimeMockCloseStub
-	conditionals []*runtimeMockCloseConditional
-	handlerSet   bool
-
-	handler func() error
+func (this runtimeMockCloseCalls) Last() RuntimeMockCloseCall { return this.At(-1) }
+func (this runtimeMockCloseCalls) All() []RuntimeMockCloseCall {
+	return mockrt.Map(this.AsyncCalls.All(), runtimeMockCloseCallOf)
 }
 
-// RuntimeMockFetchCall records one call to Runtime.Fetch.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
-type RuntimeMockFetchCall struct {
-	Index       int
-	GlobalIndex int
-	Param       RuntimeMockFetchParam
-	Return      RuntimeMockFetchReturn
+func (this runtimeMockCloseCalls) Any(pred func(RuntimeMockCloseCall) bool) bool {
+	return this.AsyncCalls.Any(mockrt.Pred(pred, runtimeMockCloseCallOf))
 }
 
-// Global returns the mock-wide ordering position for this call.
-func (this RuntimeMockFetchCall) Global() int { return this.GlobalIndex }
+func (this runtimeMockCloseCalls) Filter(pred func(RuntimeMockCloseCall) bool) []RuntimeMockCloseCall {
+	return mockrt.Map(this.AsyncCalls.Filter(mockrt.Pred(pred, runtimeMockCloseCallOf)), runtimeMockCloseCallOf)
+}
 
-// HappenedBefore returns true iff this call was recorded before other.
-func (this RuntimeMockFetchCall) HappenedBefore(other RuntimeMockCall) bool {
-	return this.GlobalIndex < other.Global()
+func (this runtimeMockCloseCalls) WaitForCall(pred func(RuntimeMockCloseCall) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, runtimeMockCloseCallOf), timeout)
+}
+
+func (this runtimeMockOn) Close() runtimeMockCloseOn {
+	return runtimeMockCloseOn{this.m.closeMethod.On(this.m.ref("Close"))}
+}
+
+type runtimeMockCloseOn struct{ mockrt.On }
+
+func (this runtimeMockCloseOn) ReturnAll(error error) {
+	this.SetAll(RuntimeMockCloseReturn{Error: error})
+}
+
+func (this runtimeMockCloseOn) ReturnCustom(value func() error) {
+	this.Custom(value != nil, func(p any) any {
+		return RuntimeMockCloseReturn{Error: value()}
+	})
+}
+
+func (this runtimeMockCloseOn) Return() runtimeMockCloseReturn {
+	return runtimeMockCloseReturn{this.On.Return()}
+}
+
+func (this runtimeMockCloseOn) Once() runtimeMockCloseReturn {
+	return runtimeMockCloseReturn{this.On.Once()}
+}
+
+func (this runtimeMockCloseOn) Always() runtimeMockCloseReturn {
+	return runtimeMockCloseReturn{this.On.Always()}
+}
+
+func (this runtimeMockCloseOn) When(pred func(RuntimeMockCloseParam) bool) runtimeMockCloseOn {
+	return runtimeMockCloseOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockCloseParam)) })}
+}
+
+type runtimeMockCloseReturn struct{ mockrt.Stub }
+
+func (this runtimeMockCloseReturn) Return() runtimeMockCloseReturn { return this }
+func (this runtimeMockCloseReturn) Error(value error) runtimeMockCloseReturn {
+	return runtimeMockCloseReturn{mockrt.Set(this.Stub, func(r *RuntimeMockCloseReturn) { r.Error = value })}
 }
 
 type RuntimeMockFetchParam struct {
@@ -300,55 +283,103 @@ type RuntimeMockFetchReturn struct {
 	Err    error
 }
 
-// runtimeMockFetchStub holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type runtimeMockFetchStub struct {
-	events []runtime_fixture.Event
-	total  int
-	err    error
-}
-
-// runtimeMockFetchConditional is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type runtimeMockFetchConditional struct {
-	pred       func(RuntimeMockFetchParam) bool
-	stubQueue  []*runtimeMockFetchStub
-	alwaysStub *runtimeMockFetchStub
-}
-
-type runtimeMockFetchCfg struct {
-	sticky       runtimeMockFetchStub
-	stickySet    bool
-	stubQueue    []*runtimeMockFetchStub
-	alwaysStub   *runtimeMockFetchStub
-	conditionals []*runtimeMockFetchConditional
-	handlerSet   bool
-
-	handler func(context.Context, []string) ([]runtime_fixture.Event, int, error)
-}
-
-// RuntimeMockHistoryCall records one call to Runtime.History.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
-type RuntimeMockHistoryCall struct {
+// RuntimeMockFetchCall records one call to Runtime.Fetch.
+type RuntimeMockFetchCall struct {
 	Index       int
 	GlobalIndex int
-	Param       RuntimeMockHistoryParam
-	Return      RuntimeMockHistoryReturn
+	Param       RuntimeMockFetchParam
+	Return      RuntimeMockFetchReturn
 }
 
-// Global returns the mock-wide ordering position for this call.
-func (this RuntimeMockHistoryCall) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this call was recorded before other.
-func (this RuntimeMockHistoryCall) HappenedBefore(other RuntimeMockCall) bool {
+func (this RuntimeMockFetchCall) Global() int { return this.GlobalIndex }
+func (this RuntimeMockFetchCall) HappenedBefore(other RuntimeMockCall) bool {
 	return this.GlobalIndex < other.Global()
+}
+
+func runtimeMockFetchCallOf(r mockrt.Rec) RuntimeMockFetchCall {
+	ret, _ := r.Return.(RuntimeMockFetchReturn)
+	return RuntimeMockFetchCall{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.(RuntimeMockFetchParam), Return: ret}
+}
+
+func (this *RuntimeMock) Fetch(ctx context.Context, ids ...string) (events []runtime_fixture.Event, total int, err error) {
+	__mockR, _ := this.fetchMethod.Call(this.ref("Fetch"), RuntimeMockFetchParam{Ctx: ctx, Ids: ids}).(RuntimeMockFetchReturn)
+	return __mockR.Events, __mockR.Total, __mockR.Err
+}
+
+func (this runtimeMockCalls) Fetch() runtimeMockFetchCalls {
+	return runtimeMockFetchCalls{this.m.fetchMethod.AsyncCalls(this.m.ref("Fetch"))}
+}
+
+type runtimeMockFetchCalls struct{ mockrt.AsyncCalls }
+
+func (this runtimeMockFetchCalls) At(i int) RuntimeMockFetchCall {
+	return runtimeMockFetchCallOf(this.AsyncCalls.At(i))
+}
+
+func (this runtimeMockFetchCalls) Last() RuntimeMockFetchCall { return this.At(-1) }
+func (this runtimeMockFetchCalls) All() []RuntimeMockFetchCall {
+	return mockrt.Map(this.AsyncCalls.All(), runtimeMockFetchCallOf)
+}
+
+func (this runtimeMockFetchCalls) Any(pred func(RuntimeMockFetchCall) bool) bool {
+	return this.AsyncCalls.Any(mockrt.Pred(pred, runtimeMockFetchCallOf))
+}
+
+func (this runtimeMockFetchCalls) Filter(pred func(RuntimeMockFetchCall) bool) []RuntimeMockFetchCall {
+	return mockrt.Map(this.AsyncCalls.Filter(mockrt.Pred(pred, runtimeMockFetchCallOf)), runtimeMockFetchCallOf)
+}
+
+func (this runtimeMockFetchCalls) WaitForCall(pred func(RuntimeMockFetchCall) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, runtimeMockFetchCallOf), timeout)
+}
+
+func (this runtimeMockOn) Fetch() runtimeMockFetchOn {
+	return runtimeMockFetchOn{this.m.fetchMethod.On(this.m.ref("Fetch"))}
+}
+
+type runtimeMockFetchOn struct{ mockrt.On }
+
+func (this runtimeMockFetchOn) ReturnAll(events []runtime_fixture.Event, total int, err error) {
+	this.SetAll(RuntimeMockFetchReturn{Events: events, Total: total, Err: err})
+}
+
+func (this runtimeMockFetchOn) ReturnCustom(value func(context.Context, []string) ([]runtime_fixture.Event, int, error)) {
+	this.Custom(value != nil, func(p any) any {
+		var r RuntimeMockFetchReturn
+		r.Events, r.Total, r.Err = value(p.(RuntimeMockFetchParam).Ctx, p.(RuntimeMockFetchParam).Ids)
+		return r
+	})
+}
+
+func (this runtimeMockFetchOn) Return() runtimeMockFetchReturn {
+	return runtimeMockFetchReturn{this.On.Return()}
+}
+
+func (this runtimeMockFetchOn) Once() runtimeMockFetchReturn {
+	return runtimeMockFetchReturn{this.On.Once()}
+}
+
+func (this runtimeMockFetchOn) Always() runtimeMockFetchReturn {
+	return runtimeMockFetchReturn{this.On.Always()}
+}
+
+func (this runtimeMockFetchOn) When(pred func(RuntimeMockFetchParam) bool) runtimeMockFetchOn {
+	return runtimeMockFetchOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockFetchParam)) })}
+}
+
+type runtimeMockFetchReturn struct{ mockrt.Stub }
+
+func (this runtimeMockFetchReturn) Return() runtimeMockFetchReturn { return this }
+func (this runtimeMockFetchReturn) Events(value []runtime_fixture.Event) runtimeMockFetchReturn {
+	return runtimeMockFetchReturn{mockrt.Set(this.Stub, func(r *RuntimeMockFetchReturn) { r.Events = value })}
+}
+
+func (this runtimeMockFetchReturn) Total(value int) runtimeMockFetchReturn {
+	return runtimeMockFetchReturn{mockrt.Set(this.Stub, func(r *RuntimeMockFetchReturn) { r.Total = value })}
+}
+
+func (this runtimeMockFetchReturn) Err(value error) runtimeMockFetchReturn {
+	return runtimeMockFetchReturn{mockrt.Set(this.Stub, func(r *RuntimeMockFetchReturn) { r.Err = value })}
 }
 
 type RuntimeMockHistoryParam struct {
@@ -359,53 +390,93 @@ type RuntimeMockHistoryReturn struct {
 	EventArr []runtime_fixture.Event
 }
 
-// runtimeMockHistoryStub holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type runtimeMockHistoryStub struct {
-	eventArr []runtime_fixture.Event
-}
-
-// runtimeMockHistoryConditional is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type runtimeMockHistoryConditional struct {
-	pred       func(RuntimeMockHistoryParam) bool
-	stubQueue  []*runtimeMockHistoryStub
-	alwaysStub *runtimeMockHistoryStub
-}
-
-type runtimeMockHistoryCfg struct {
-	sticky       runtimeMockHistoryStub
-	stickySet    bool
-	stubQueue    []*runtimeMockHistoryStub
-	alwaysStub   *runtimeMockHistoryStub
-	conditionals []*runtimeMockHistoryConditional
-	handlerSet   bool
-
-	handler func(time.Duration) []runtime_fixture.Event
-}
-
-// RuntimeMockPublishCall records one call to Runtime.Publish.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
-type RuntimeMockPublishCall struct {
+// RuntimeMockHistoryCall records one call to Runtime.History.
+type RuntimeMockHistoryCall struct {
 	Index       int
 	GlobalIndex int
-	Param       RuntimeMockPublishParam
-	Return      RuntimeMockPublishReturn
+	Param       RuntimeMockHistoryParam
+	Return      RuntimeMockHistoryReturn
 }
 
-// Global returns the mock-wide ordering position for this call.
-func (this RuntimeMockPublishCall) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this call was recorded before other.
-func (this RuntimeMockPublishCall) HappenedBefore(other RuntimeMockCall) bool {
+func (this RuntimeMockHistoryCall) Global() int { return this.GlobalIndex }
+func (this RuntimeMockHistoryCall) HappenedBefore(other RuntimeMockCall) bool {
 	return this.GlobalIndex < other.Global()
+}
+
+func runtimeMockHistoryCallOf(r mockrt.Rec) RuntimeMockHistoryCall {
+	ret, _ := r.Return.(RuntimeMockHistoryReturn)
+	return RuntimeMockHistoryCall{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.(RuntimeMockHistoryParam), Return: ret}
+}
+
+func (this *RuntimeMock) History(window time.Duration) []runtime_fixture.Event {
+	__mockR, _ := this.historyMethod.Call(this.ref("History"), RuntimeMockHistoryParam{Window: window}).(RuntimeMockHistoryReturn)
+	return __mockR.EventArr
+}
+
+func (this runtimeMockCalls) History() runtimeMockHistoryCalls {
+	return runtimeMockHistoryCalls{this.m.historyMethod.AsyncCalls(this.m.ref("History"))}
+}
+
+type runtimeMockHistoryCalls struct{ mockrt.AsyncCalls }
+
+func (this runtimeMockHistoryCalls) At(i int) RuntimeMockHistoryCall {
+	return runtimeMockHistoryCallOf(this.AsyncCalls.At(i))
+}
+
+func (this runtimeMockHistoryCalls) Last() RuntimeMockHistoryCall { return this.At(-1) }
+func (this runtimeMockHistoryCalls) All() []RuntimeMockHistoryCall {
+	return mockrt.Map(this.AsyncCalls.All(), runtimeMockHistoryCallOf)
+}
+
+func (this runtimeMockHistoryCalls) Any(pred func(RuntimeMockHistoryCall) bool) bool {
+	return this.AsyncCalls.Any(mockrt.Pred(pred, runtimeMockHistoryCallOf))
+}
+
+func (this runtimeMockHistoryCalls) Filter(pred func(RuntimeMockHistoryCall) bool) []RuntimeMockHistoryCall {
+	return mockrt.Map(this.AsyncCalls.Filter(mockrt.Pred(pred, runtimeMockHistoryCallOf)), runtimeMockHistoryCallOf)
+}
+
+func (this runtimeMockHistoryCalls) WaitForCall(pred func(RuntimeMockHistoryCall) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, runtimeMockHistoryCallOf), timeout)
+}
+
+func (this runtimeMockOn) History() runtimeMockHistoryOn {
+	return runtimeMockHistoryOn{this.m.historyMethod.On(this.m.ref("History"))}
+}
+
+type runtimeMockHistoryOn struct{ mockrt.On }
+
+func (this runtimeMockHistoryOn) ReturnAll(eventArr []runtime_fixture.Event) {
+	this.SetAll(RuntimeMockHistoryReturn{EventArr: eventArr})
+}
+
+func (this runtimeMockHistoryOn) ReturnCustom(value func(time.Duration) []runtime_fixture.Event) {
+	this.Custom(value != nil, func(p any) any {
+		return RuntimeMockHistoryReturn{EventArr: value(p.(RuntimeMockHistoryParam).Window)}
+	})
+}
+
+func (this runtimeMockHistoryOn) Return() runtimeMockHistoryReturn {
+	return runtimeMockHistoryReturn{this.On.Return()}
+}
+
+func (this runtimeMockHistoryOn) Once() runtimeMockHistoryReturn {
+	return runtimeMockHistoryReturn{this.On.Once()}
+}
+
+func (this runtimeMockHistoryOn) Always() runtimeMockHistoryReturn {
+	return runtimeMockHistoryReturn{this.On.Always()}
+}
+
+func (this runtimeMockHistoryOn) When(pred func(RuntimeMockHistoryParam) bool) runtimeMockHistoryOn {
+	return runtimeMockHistoryOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockHistoryParam)) })}
+}
+
+type runtimeMockHistoryReturn struct{ mockrt.Stub }
+
+func (this runtimeMockHistoryReturn) Return() runtimeMockHistoryReturn { return this }
+func (this runtimeMockHistoryReturn) EventArr(value []runtime_fixture.Event) runtimeMockHistoryReturn {
+	return runtimeMockHistoryReturn{mockrt.Set(this.Stub, func(r *RuntimeMockHistoryReturn) { r.EventArr = value })}
 }
 
 type RuntimeMockPublishParam struct {
@@ -419,58 +490,102 @@ type RuntimeMockPublishReturn struct {
 	Error error
 }
 
-// runtimeMockPublishStub holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type runtimeMockPublishStub struct {
-	event runtime_fixture.Event
-	error error
-}
-
-// runtimeMockPublishConditional is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type runtimeMockPublishConditional struct {
-	pred       func(RuntimeMockPublishParam) bool
-	stubQueue  []*runtimeMockPublishStub
-	alwaysStub *runtimeMockPublishStub
-}
-
-type runtimeMockPublishCfg struct {
-	sticky       runtimeMockPublishStub
-	stickySet    bool
-	stubQueue    []*runtimeMockPublishStub
-	alwaysStub   *runtimeMockPublishStub
-	conditionals []*runtimeMockPublishConditional
-	handlerSet   bool
-
-	handler func(context.Context, string, []byte) (runtime_fixture.Event, error)
-}
-
-// RuntimeMockStatsCall records one call to Runtime.Stats.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
-type RuntimeMockStatsCall struct {
+// RuntimeMockPublishCall records one call to Runtime.Publish.
+type RuntimeMockPublishCall struct {
 	Index       int
 	GlobalIndex int
-	Param       RuntimeMockStatsParam
-	Return      RuntimeMockStatsReturn
+	Param       RuntimeMockPublishParam
+	Return      RuntimeMockPublishReturn
 }
 
-// Global returns the mock-wide ordering position for this call.
-func (this RuntimeMockStatsCall) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this call was recorded before other.
-func (this RuntimeMockStatsCall) HappenedBefore(other RuntimeMockCall) bool {
+func (this RuntimeMockPublishCall) Global() int { return this.GlobalIndex }
+func (this RuntimeMockPublishCall) HappenedBefore(other RuntimeMockCall) bool {
 	return this.GlobalIndex < other.Global()
 }
 
-type RuntimeMockStatsParam struct {
+func runtimeMockPublishCallOf(r mockrt.Rec) RuntimeMockPublishCall {
+	ret, _ := r.Return.(RuntimeMockPublishReturn)
+	return RuntimeMockPublishCall{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.(RuntimeMockPublishParam), Return: ret}
 }
+
+func (this *RuntimeMock) Publish(ctx context.Context, topic string, payload []byte) (runtime_fixture.Event, error) {
+	__mockR, _ := this.publishMethod.Call(this.ref("Publish"), RuntimeMockPublishParam{Ctx: ctx, Topic: topic, Payload: payload}).(RuntimeMockPublishReturn)
+	return __mockR.Event, __mockR.Error
+}
+
+func (this runtimeMockCalls) Publish() runtimeMockPublishCalls {
+	return runtimeMockPublishCalls{this.m.publishMethod.AsyncCalls(this.m.ref("Publish"))}
+}
+
+type runtimeMockPublishCalls struct{ mockrt.AsyncCalls }
+
+func (this runtimeMockPublishCalls) At(i int) RuntimeMockPublishCall {
+	return runtimeMockPublishCallOf(this.AsyncCalls.At(i))
+}
+
+func (this runtimeMockPublishCalls) Last() RuntimeMockPublishCall { return this.At(-1) }
+func (this runtimeMockPublishCalls) All() []RuntimeMockPublishCall {
+	return mockrt.Map(this.AsyncCalls.All(), runtimeMockPublishCallOf)
+}
+
+func (this runtimeMockPublishCalls) Any(pred func(RuntimeMockPublishCall) bool) bool {
+	return this.AsyncCalls.Any(mockrt.Pred(pred, runtimeMockPublishCallOf))
+}
+
+func (this runtimeMockPublishCalls) Filter(pred func(RuntimeMockPublishCall) bool) []RuntimeMockPublishCall {
+	return mockrt.Map(this.AsyncCalls.Filter(mockrt.Pred(pred, runtimeMockPublishCallOf)), runtimeMockPublishCallOf)
+}
+
+func (this runtimeMockPublishCalls) WaitForCall(pred func(RuntimeMockPublishCall) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, runtimeMockPublishCallOf), timeout)
+}
+
+func (this runtimeMockOn) Publish() runtimeMockPublishOn {
+	return runtimeMockPublishOn{this.m.publishMethod.On(this.m.ref("Publish"))}
+}
+
+type runtimeMockPublishOn struct{ mockrt.On }
+
+func (this runtimeMockPublishOn) ReturnAll(event runtime_fixture.Event, error error) {
+	this.SetAll(RuntimeMockPublishReturn{Event: event, Error: error})
+}
+
+func (this runtimeMockPublishOn) ReturnCustom(value func(context.Context, string, []byte) (runtime_fixture.Event, error)) {
+	this.Custom(value != nil, func(p any) any {
+		var r RuntimeMockPublishReturn
+		r.Event, r.Error = value(p.(RuntimeMockPublishParam).Ctx, p.(RuntimeMockPublishParam).Topic, p.(RuntimeMockPublishParam).Payload)
+		return r
+	})
+}
+
+func (this runtimeMockPublishOn) Return() runtimeMockPublishReturn {
+	return runtimeMockPublishReturn{this.On.Return()}
+}
+
+func (this runtimeMockPublishOn) Once() runtimeMockPublishReturn {
+	return runtimeMockPublishReturn{this.On.Once()}
+}
+
+func (this runtimeMockPublishOn) Always() runtimeMockPublishReturn {
+	return runtimeMockPublishReturn{this.On.Always()}
+}
+
+func (this runtimeMockPublishOn) When(pred func(RuntimeMockPublishParam) bool) runtimeMockPublishOn {
+	return runtimeMockPublishOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockPublishParam)) })}
+}
+
+type runtimeMockPublishReturn struct{ mockrt.Stub }
+
+func (this runtimeMockPublishReturn) Return() runtimeMockPublishReturn { return this }
+func (this runtimeMockPublishReturn) Event(value runtime_fixture.Event) runtimeMockPublishReturn {
+	return runtimeMockPublishReturn{mockrt.Set(this.Stub, func(r *RuntimeMockPublishReturn) { r.Event = value })}
+}
+
+func (this runtimeMockPublishReturn) Error(value error) runtimeMockPublishReturn {
+	return runtimeMockPublishReturn{mockrt.Set(this.Stub, func(r *RuntimeMockPublishReturn) { r.Error = value })}
+}
+
+type RuntimeMockStatsParam struct{}
 
 type RuntimeMockStatsReturn struct {
 	Active int
@@ -478,55 +593,103 @@ type RuntimeMockStatsReturn struct {
 	Err    error
 }
 
-// runtimeMockStatsStub holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type runtimeMockStatsStub struct {
-	active int
-	queued int
-	err    error
-}
-
-// runtimeMockStatsConditional is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type runtimeMockStatsConditional struct {
-	pred       func(RuntimeMockStatsParam) bool
-	stubQueue  []*runtimeMockStatsStub
-	alwaysStub *runtimeMockStatsStub
-}
-
-type runtimeMockStatsCfg struct {
-	sticky       runtimeMockStatsStub
-	stickySet    bool
-	stubQueue    []*runtimeMockStatsStub
-	alwaysStub   *runtimeMockStatsStub
-	conditionals []*runtimeMockStatsConditional
-	handlerSet   bool
-
-	handler func() (int, int, error)
-}
-
-// RuntimeMockSubscribeCall records one call to Runtime.Subscribe.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
-type RuntimeMockSubscribeCall struct {
+// RuntimeMockStatsCall records one call to Runtime.Stats.
+type RuntimeMockStatsCall struct {
 	Index       int
 	GlobalIndex int
-	Param       RuntimeMockSubscribeParam
-	Return      RuntimeMockSubscribeReturn
+	Param       RuntimeMockStatsParam
+	Return      RuntimeMockStatsReturn
 }
 
-// Global returns the mock-wide ordering position for this call.
-func (this RuntimeMockSubscribeCall) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this call was recorded before other.
-func (this RuntimeMockSubscribeCall) HappenedBefore(other RuntimeMockCall) bool {
+func (this RuntimeMockStatsCall) Global() int { return this.GlobalIndex }
+func (this RuntimeMockStatsCall) HappenedBefore(other RuntimeMockCall) bool {
 	return this.GlobalIndex < other.Global()
+}
+
+func runtimeMockStatsCallOf(r mockrt.Rec) RuntimeMockStatsCall {
+	ret, _ := r.Return.(RuntimeMockStatsReturn)
+	return RuntimeMockStatsCall{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.(RuntimeMockStatsParam), Return: ret}
+}
+
+func (this *RuntimeMock) Stats() (active int, queued int, err error) {
+	__mockR, _ := this.statsMethod.Call(this.ref("Stats"), RuntimeMockStatsParam{}).(RuntimeMockStatsReturn)
+	return __mockR.Active, __mockR.Queued, __mockR.Err
+}
+
+func (this runtimeMockCalls) Stats() runtimeMockStatsCalls {
+	return runtimeMockStatsCalls{this.m.statsMethod.AsyncCalls(this.m.ref("Stats"))}
+}
+
+type runtimeMockStatsCalls struct{ mockrt.AsyncCalls }
+
+func (this runtimeMockStatsCalls) At(i int) RuntimeMockStatsCall {
+	return runtimeMockStatsCallOf(this.AsyncCalls.At(i))
+}
+
+func (this runtimeMockStatsCalls) Last() RuntimeMockStatsCall { return this.At(-1) }
+func (this runtimeMockStatsCalls) All() []RuntimeMockStatsCall {
+	return mockrt.Map(this.AsyncCalls.All(), runtimeMockStatsCallOf)
+}
+
+func (this runtimeMockStatsCalls) Any(pred func(RuntimeMockStatsCall) bool) bool {
+	return this.AsyncCalls.Any(mockrt.Pred(pred, runtimeMockStatsCallOf))
+}
+
+func (this runtimeMockStatsCalls) Filter(pred func(RuntimeMockStatsCall) bool) []RuntimeMockStatsCall {
+	return mockrt.Map(this.AsyncCalls.Filter(mockrt.Pred(pred, runtimeMockStatsCallOf)), runtimeMockStatsCallOf)
+}
+
+func (this runtimeMockStatsCalls) WaitForCall(pred func(RuntimeMockStatsCall) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, runtimeMockStatsCallOf), timeout)
+}
+
+func (this runtimeMockOn) Stats() runtimeMockStatsOn {
+	return runtimeMockStatsOn{this.m.statsMethod.On(this.m.ref("Stats"))}
+}
+
+type runtimeMockStatsOn struct{ mockrt.On }
+
+func (this runtimeMockStatsOn) ReturnAll(active int, queued int, err error) {
+	this.SetAll(RuntimeMockStatsReturn{Active: active, Queued: queued, Err: err})
+}
+
+func (this runtimeMockStatsOn) ReturnCustom(value func() (int, int, error)) {
+	this.Custom(value != nil, func(p any) any {
+		var r RuntimeMockStatsReturn
+		r.Active, r.Queued, r.Err = value()
+		return r
+	})
+}
+
+func (this runtimeMockStatsOn) Return() runtimeMockStatsReturn {
+	return runtimeMockStatsReturn{this.On.Return()}
+}
+
+func (this runtimeMockStatsOn) Once() runtimeMockStatsReturn {
+	return runtimeMockStatsReturn{this.On.Once()}
+}
+
+func (this runtimeMockStatsOn) Always() runtimeMockStatsReturn {
+	return runtimeMockStatsReturn{this.On.Always()}
+}
+
+func (this runtimeMockStatsOn) When(pred func(RuntimeMockStatsParam) bool) runtimeMockStatsOn {
+	return runtimeMockStatsOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockStatsParam)) })}
+}
+
+type runtimeMockStatsReturn struct{ mockrt.Stub }
+
+func (this runtimeMockStatsReturn) Return() runtimeMockStatsReturn { return this }
+func (this runtimeMockStatsReturn) Active(value int) runtimeMockStatsReturn {
+	return runtimeMockStatsReturn{mockrt.Set(this.Stub, func(r *RuntimeMockStatsReturn) { r.Active = value })}
+}
+
+func (this runtimeMockStatsReturn) Queued(value int) runtimeMockStatsReturn {
+	return runtimeMockStatsReturn{mockrt.Set(this.Stub, func(r *RuntimeMockStatsReturn) { r.Queued = value })}
+}
+
+func (this runtimeMockStatsReturn) Err(value error) runtimeMockStatsReturn {
+	return runtimeMockStatsReturn{mockrt.Set(this.Stub, func(r *RuntimeMockStatsReturn) { r.Err = value })}
 }
 
 type RuntimeMockSubscribeParam struct {
@@ -540,2116 +703,97 @@ type RuntimeMockSubscribeReturn struct {
 	Err    error
 }
 
-// runtimeMockSubscribeStub holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type runtimeMockSubscribeStub struct {
-	cancel func()
-	err    error
+// RuntimeMockSubscribeCall records one call to Runtime.Subscribe.
+type RuntimeMockSubscribeCall struct {
+	Index       int
+	GlobalIndex int
+	Param       RuntimeMockSubscribeParam
+	Return      RuntimeMockSubscribeReturn
 }
 
-// runtimeMockSubscribeConditional is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type runtimeMockSubscribeConditional struct {
-	pred       func(RuntimeMockSubscribeParam) bool
-	stubQueue  []*runtimeMockSubscribeStub
-	alwaysStub *runtimeMockSubscribeStub
+func (this RuntimeMockSubscribeCall) Global() int { return this.GlobalIndex }
+func (this RuntimeMockSubscribeCall) HappenedBefore(other RuntimeMockCall) bool {
+	return this.GlobalIndex < other.Global()
 }
 
-type runtimeMockSubscribeCfg struct {
-	sticky       runtimeMockSubscribeStub
-	stickySet    bool
-	stubQueue    []*runtimeMockSubscribeStub
-	alwaysStub   *runtimeMockSubscribeStub
-	conditionals []*runtimeMockSubscribeConditional
-	handlerSet   bool
-
-	handler func(context.Context, []string, func(runtime_fixture.Event) error) (func(), error)
-}
-
-type RuntimeMock struct {
-	mu                sync.Mutex
-	globalCallCounter int
-	timelineLog       []RuntimeMockTimelineEntry
-
-	activateLog []RuntimeMockActivateCall
-	activateCfg runtimeMockActivateCfg
-
-	closeLog []RuntimeMockCloseCall
-	closeCfg runtimeMockCloseCfg
-
-	fetchLog []RuntimeMockFetchCall
-	fetchCfg runtimeMockFetchCfg
-
-	historyLog []RuntimeMockHistoryCall
-	historyCfg runtimeMockHistoryCfg
-
-	publishLog []RuntimeMockPublishCall
-	publishCfg runtimeMockPublishCfg
-
-	statsLog []RuntimeMockStatsCall
-	statsCfg runtimeMockStatsCfg
-
-	subscribeLog []RuntimeMockSubscribeCall
-	subscribeCfg runtimeMockSubscribeCfg
-}
-
-// NewRuntimeMock returns a zero-valued RuntimeMock. Equivalent
-// to &RuntimeMock{}; provided as a consistent entry point that may
-// initialize internal state in future versions.
-func NewRuntimeMock() *RuntimeMock {
-	return &RuntimeMock{}
-}
-
-func (this *RuntimeMock) Activate(ctx context.Context, t *runtime_fixture.Trigger) error {
-	this.mu.Lock()
-	__mockParam := RuntimeMockActivateParam{Ctx: ctx, T: t}
-	__mockGlobal := this.globalCallCounter
-	this.globalCallCounter++
-	this.activateLog = append(this.activateLog, RuntimeMockActivateCall{
-		Index:       len(this.activateLog),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.activateLog) - 1
-	this.timelineLog = append(this.timelineLog, RuntimeMockTimelineEntry{
-		Method:      "Activate",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.activateCfg.handler
-	var __mockSource runtimeMockActivateStub
-	__mockMatched := false
-	if len(this.activateCfg.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.activateCfg.conditionals {
-			if this.activateCfg.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			this.mu.Unlock()
-			panic("RuntimeMock.Activate: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.activateCfg.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.activateCfg.stubQueue) > 0 {
-			__mockSource = *this.activateCfg.stubQueue[0]
-			this.activateCfg.stubQueue = this.activateCfg.stubQueue[1:]
-		} else if this.activateCfg.alwaysStub != nil {
-			__mockSource = *this.activateCfg.alwaysStub
-		} else {
-			__mockSource = this.activateCfg.sticky
-		}
-	}
-	__mockR0 := __mockSource.error
-	this.mu.Unlock()
-
-	var __mockRet0 error
-	if __mockHandler != nil {
-		__mockRet0 = __mockHandler(ctx, t)
-	} else {
-		__mockRet0 = __mockR0
-	}
-
-	this.mu.Lock()
-	if __mockCallIdx < len(this.activateLog) {
-		this.activateLog[__mockCallIdx].Return = RuntimeMockActivateReturn{Error: __mockRet0}
-	}
-	this.mu.Unlock()
-
-	return __mockRet0
-}
-
-func (this *RuntimeMock) Close() error {
-	this.mu.Lock()
-	__mockParam := RuntimeMockCloseParam{}
-	__mockGlobal := this.globalCallCounter
-	this.globalCallCounter++
-	this.closeLog = append(this.closeLog, RuntimeMockCloseCall{
-		Index:       len(this.closeLog),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.closeLog) - 1
-	this.timelineLog = append(this.timelineLog, RuntimeMockTimelineEntry{
-		Method:      "Close",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.closeCfg.handler
-	var __mockSource runtimeMockCloseStub
-	__mockMatched := false
-	if len(this.closeCfg.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.closeCfg.conditionals {
-			if this.closeCfg.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			this.mu.Unlock()
-			panic("RuntimeMock.Close: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.closeCfg.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.closeCfg.stubQueue) > 0 {
-			__mockSource = *this.closeCfg.stubQueue[0]
-			this.closeCfg.stubQueue = this.closeCfg.stubQueue[1:]
-		} else if this.closeCfg.alwaysStub != nil {
-			__mockSource = *this.closeCfg.alwaysStub
-		} else {
-			__mockSource = this.closeCfg.sticky
-		}
-	}
-	__mockR0 := __mockSource.error
-	this.mu.Unlock()
-
-	var __mockRet0 error
-	if __mockHandler != nil {
-		__mockRet0 = __mockHandler()
-	} else {
-		__mockRet0 = __mockR0
-	}
-
-	this.mu.Lock()
-	if __mockCallIdx < len(this.closeLog) {
-		this.closeLog[__mockCallIdx].Return = RuntimeMockCloseReturn{Error: __mockRet0}
-	}
-	this.mu.Unlock()
-
-	return __mockRet0
-}
-
-func (this *RuntimeMock) Fetch(ctx context.Context, ids ...string) (events []runtime_fixture.Event, total int, err error) {
-	this.mu.Lock()
-	__mockParam := RuntimeMockFetchParam{Ctx: ctx, Ids: ids}
-	__mockGlobal := this.globalCallCounter
-	this.globalCallCounter++
-	this.fetchLog = append(this.fetchLog, RuntimeMockFetchCall{
-		Index:       len(this.fetchLog),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.fetchLog) - 1
-	this.timelineLog = append(this.timelineLog, RuntimeMockTimelineEntry{
-		Method:      "Fetch",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.fetchCfg.handler
-	var __mockSource runtimeMockFetchStub
-	__mockMatched := false
-	if len(this.fetchCfg.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.fetchCfg.conditionals {
-			if this.fetchCfg.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			this.mu.Unlock()
-			panic("RuntimeMock.Fetch: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.fetchCfg.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.fetchCfg.stubQueue) > 0 {
-			__mockSource = *this.fetchCfg.stubQueue[0]
-			this.fetchCfg.stubQueue = this.fetchCfg.stubQueue[1:]
-		} else if this.fetchCfg.alwaysStub != nil {
-			__mockSource = *this.fetchCfg.alwaysStub
-		} else {
-			__mockSource = this.fetchCfg.sticky
-		}
-	}
-	__mockR0 := __mockSource.events
-	__mockR1 := __mockSource.total
-	__mockR2 := __mockSource.err
-	this.mu.Unlock()
-
-	var __mockRet0 []runtime_fixture.Event
-	var __mockRet1 int
-	var __mockRet2 error
-	if __mockHandler != nil {
-		__mockRet0, __mockRet1, __mockRet2 = __mockHandler(ctx, ids)
-	} else {
-		__mockRet0, __mockRet1, __mockRet2 = __mockR0, __mockR1, __mockR2
-	}
-
-	this.mu.Lock()
-	if __mockCallIdx < len(this.fetchLog) {
-		this.fetchLog[__mockCallIdx].Return = RuntimeMockFetchReturn{Events: __mockRet0, Total: __mockRet1, Err: __mockRet2}
-	}
-	this.mu.Unlock()
-
-	return __mockRet0, __mockRet1, __mockRet2
-}
-
-func (this *RuntimeMock) History(window time.Duration) []runtime_fixture.Event {
-	this.mu.Lock()
-	__mockParam := RuntimeMockHistoryParam{Window: window}
-	__mockGlobal := this.globalCallCounter
-	this.globalCallCounter++
-	this.historyLog = append(this.historyLog, RuntimeMockHistoryCall{
-		Index:       len(this.historyLog),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.historyLog) - 1
-	this.timelineLog = append(this.timelineLog, RuntimeMockTimelineEntry{
-		Method:      "History",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.historyCfg.handler
-	var __mockSource runtimeMockHistoryStub
-	__mockMatched := false
-	if len(this.historyCfg.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.historyCfg.conditionals {
-			if this.historyCfg.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			this.mu.Unlock()
-			panic("RuntimeMock.History: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.historyCfg.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.historyCfg.stubQueue) > 0 {
-			__mockSource = *this.historyCfg.stubQueue[0]
-			this.historyCfg.stubQueue = this.historyCfg.stubQueue[1:]
-		} else if this.historyCfg.alwaysStub != nil {
-			__mockSource = *this.historyCfg.alwaysStub
-		} else {
-			__mockSource = this.historyCfg.sticky
-		}
-	}
-	__mockR0 := __mockSource.eventArr
-	this.mu.Unlock()
-
-	var __mockRet0 []runtime_fixture.Event
-	if __mockHandler != nil {
-		__mockRet0 = __mockHandler(window)
-	} else {
-		__mockRet0 = __mockR0
-	}
-
-	this.mu.Lock()
-	if __mockCallIdx < len(this.historyLog) {
-		this.historyLog[__mockCallIdx].Return = RuntimeMockHistoryReturn{EventArr: __mockRet0}
-	}
-	this.mu.Unlock()
-
-	return __mockRet0
-}
-
-func (this *RuntimeMock) Publish(ctx context.Context, topic string, payload []byte) (runtime_fixture.Event, error) {
-	this.mu.Lock()
-	__mockParam := RuntimeMockPublishParam{Ctx: ctx, Topic: topic, Payload: payload}
-	__mockGlobal := this.globalCallCounter
-	this.globalCallCounter++
-	this.publishLog = append(this.publishLog, RuntimeMockPublishCall{
-		Index:       len(this.publishLog),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.publishLog) - 1
-	this.timelineLog = append(this.timelineLog, RuntimeMockTimelineEntry{
-		Method:      "Publish",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.publishCfg.handler
-	var __mockSource runtimeMockPublishStub
-	__mockMatched := false
-	if len(this.publishCfg.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.publishCfg.conditionals {
-			if this.publishCfg.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			this.mu.Unlock()
-			panic("RuntimeMock.Publish: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.publishCfg.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.publishCfg.stubQueue) > 0 {
-			__mockSource = *this.publishCfg.stubQueue[0]
-			this.publishCfg.stubQueue = this.publishCfg.stubQueue[1:]
-		} else if this.publishCfg.alwaysStub != nil {
-			__mockSource = *this.publishCfg.alwaysStub
-		} else {
-			__mockSource = this.publishCfg.sticky
-		}
-	}
-	__mockR0 := __mockSource.event
-	__mockR1 := __mockSource.error
-	this.mu.Unlock()
-
-	var __mockRet0 runtime_fixture.Event
-	var __mockRet1 error
-	if __mockHandler != nil {
-		__mockRet0, __mockRet1 = __mockHandler(ctx, topic, payload)
-	} else {
-		__mockRet0, __mockRet1 = __mockR0, __mockR1
-	}
-
-	this.mu.Lock()
-	if __mockCallIdx < len(this.publishLog) {
-		this.publishLog[__mockCallIdx].Return = RuntimeMockPublishReturn{Event: __mockRet0, Error: __mockRet1}
-	}
-	this.mu.Unlock()
-
-	return __mockRet0, __mockRet1
-}
-
-func (this *RuntimeMock) Stats() (active int, queued int, err error) {
-	this.mu.Lock()
-	__mockParam := RuntimeMockStatsParam{}
-	__mockGlobal := this.globalCallCounter
-	this.globalCallCounter++
-	this.statsLog = append(this.statsLog, RuntimeMockStatsCall{
-		Index:       len(this.statsLog),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.statsLog) - 1
-	this.timelineLog = append(this.timelineLog, RuntimeMockTimelineEntry{
-		Method:      "Stats",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.statsCfg.handler
-	var __mockSource runtimeMockStatsStub
-	__mockMatched := false
-	if len(this.statsCfg.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.statsCfg.conditionals {
-			if this.statsCfg.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			this.mu.Unlock()
-			panic("RuntimeMock.Stats: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.statsCfg.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.statsCfg.stubQueue) > 0 {
-			__mockSource = *this.statsCfg.stubQueue[0]
-			this.statsCfg.stubQueue = this.statsCfg.stubQueue[1:]
-		} else if this.statsCfg.alwaysStub != nil {
-			__mockSource = *this.statsCfg.alwaysStub
-		} else {
-			__mockSource = this.statsCfg.sticky
-		}
-	}
-	__mockR0 := __mockSource.active
-	__mockR1 := __mockSource.queued
-	__mockR2 := __mockSource.err
-	this.mu.Unlock()
-
-	var __mockRet0 int
-	var __mockRet1 int
-	var __mockRet2 error
-	if __mockHandler != nil {
-		__mockRet0, __mockRet1, __mockRet2 = __mockHandler()
-	} else {
-		__mockRet0, __mockRet1, __mockRet2 = __mockR0, __mockR1, __mockR2
-	}
-
-	this.mu.Lock()
-	if __mockCallIdx < len(this.statsLog) {
-		this.statsLog[__mockCallIdx].Return = RuntimeMockStatsReturn{Active: __mockRet0, Queued: __mockRet1, Err: __mockRet2}
-	}
-	this.mu.Unlock()
-
-	return __mockRet0, __mockRet1, __mockRet2
+func runtimeMockSubscribeCallOf(r mockrt.Rec) RuntimeMockSubscribeCall {
+	ret, _ := r.Return.(RuntimeMockSubscribeReturn)
+	return RuntimeMockSubscribeCall{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.(RuntimeMockSubscribeParam), Return: ret}
 }
 
 func (this *RuntimeMock) Subscribe(ctx context.Context, topics []string, handler func(runtime_fixture.Event) error) (cancel func(), err error) {
-	this.mu.Lock()
-	__mockParam := RuntimeMockSubscribeParam{Ctx: ctx, Topics: topics, Handler: handler}
-	__mockGlobal := this.globalCallCounter
-	this.globalCallCounter++
-	this.subscribeLog = append(this.subscribeLog, RuntimeMockSubscribeCall{
-		Index:       len(this.subscribeLog),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.subscribeLog) - 1
-	this.timelineLog = append(this.timelineLog, RuntimeMockTimelineEntry{
-		Method:      "Subscribe",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.subscribeCfg.handler
-	var __mockSource runtimeMockSubscribeStub
-	__mockMatched := false
-	if len(this.subscribeCfg.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.subscribeCfg.conditionals {
-			if this.subscribeCfg.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			this.mu.Unlock()
-			panic("RuntimeMock.Subscribe: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.subscribeCfg.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.subscribeCfg.stubQueue) > 0 {
-			__mockSource = *this.subscribeCfg.stubQueue[0]
-			this.subscribeCfg.stubQueue = this.subscribeCfg.stubQueue[1:]
-		} else if this.subscribeCfg.alwaysStub != nil {
-			__mockSource = *this.subscribeCfg.alwaysStub
-		} else {
-			__mockSource = this.subscribeCfg.sticky
-		}
-	}
-	__mockR0 := __mockSource.cancel
-	__mockR1 := __mockSource.err
-	this.mu.Unlock()
-
-	var __mockRet0 func()
-	var __mockRet1 error
-	if __mockHandler != nil {
-		__mockRet0, __mockRet1 = __mockHandler(ctx, topics, handler)
-	} else {
-		__mockRet0, __mockRet1 = __mockR0, __mockR1
-	}
-
-	this.mu.Lock()
-	if __mockCallIdx < len(this.subscribeLog) {
-		this.subscribeLog[__mockCallIdx].Return = RuntimeMockSubscribeReturn{Cancel: __mockRet0, Err: __mockRet1}
-	}
-	this.mu.Unlock()
-
-	return __mockRet0, __mockRet1
-}
-
-func (this *RuntimeMock) Reset() {
-	this.mu.Lock()
-	defer this.mu.Unlock()
-	this.globalCallCounter = 0
-	this.timelineLog = nil
-	this.activateLog = nil
-	this.activateCfg = runtimeMockActivateCfg{}
-	this.closeLog = nil
-	this.closeCfg = runtimeMockCloseCfg{}
-	this.fetchLog = nil
-	this.fetchCfg = runtimeMockFetchCfg{}
-	this.historyLog = nil
-	this.historyCfg = runtimeMockHistoryCfg{}
-	this.publishLog = nil
-	this.publishCfg = runtimeMockPublishCfg{}
-	this.statsLog = nil
-	this.statsCfg = runtimeMockStatsCfg{}
-	this.subscribeLog = nil
-	this.subscribeCfg = runtimeMockSubscribeCfg{}
-}
-
-type runtimeMockCalls struct{ m *RuntimeMock }
-
-// Calls returns the inspection namespace — one method per
-// interface method, each returning per-call records of Runtime.
-func (this *RuntimeMock) Calls() runtimeMockCalls {
-	return runtimeMockCalls{m: this}
-}
-
-// Reset clears every per-method call log on the mock and the cross-method
-// timeline, without touching configured returns or installed handlers.
-func (this runtimeMockCalls) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.globalCallCounter = 0
-	this.m.timelineLog = nil
-	this.m.activateLog = nil
-	this.m.closeLog = nil
-	this.m.fetchLog = nil
-	this.m.historyLog = nil
-	this.m.publishLog = nil
-	this.m.statsLog = nil
-	this.m.subscribeLog = nil
-}
-
-func (this runtimeMockCalls) Activate() runtimeMockActivateCalls {
-	return runtimeMockActivateCalls{runtimeMockCallsHelper: runtimeMockCallsHelper[RuntimeMockActivateCall]{
-		mu:          &this.m.mu,
-		indexGetter: func(c RuntimeMockActivateCall) int { return c.Index },
-		log:         &this.m.activateLog,
-		pendingFn: func() int {
-			n := len(this.m.activateCfg.stubQueue)
-			for __mockI := range this.m.activateCfg.conditionals {
-				n += len(this.m.activateCfg.conditionals[__mockI].stubQueue)
-			}
-			return n
-		},
-		indexer: this.m.callIndex,
-	}}
-}
-
-func (this runtimeMockCalls) Close() runtimeMockCloseCalls {
-	return runtimeMockCloseCalls{runtimeMockCallsHelper: runtimeMockCallsHelper[RuntimeMockCloseCall]{
-		mu:          &this.m.mu,
-		indexGetter: func(c RuntimeMockCloseCall) int { return c.Index },
-		log:         &this.m.closeLog,
-		pendingFn: func() int {
-			n := len(this.m.closeCfg.stubQueue)
-			for __mockI := range this.m.closeCfg.conditionals {
-				n += len(this.m.closeCfg.conditionals[__mockI].stubQueue)
-			}
-			return n
-		},
-		indexer: this.m.callIndex,
-	}}
-}
-
-func (this runtimeMockCalls) Fetch() runtimeMockFetchCalls {
-	return runtimeMockFetchCalls{runtimeMockCallsHelper: runtimeMockCallsHelper[RuntimeMockFetchCall]{
-		mu:          &this.m.mu,
-		indexGetter: func(c RuntimeMockFetchCall) int { return c.Index },
-		log:         &this.m.fetchLog,
-		pendingFn: func() int {
-			n := len(this.m.fetchCfg.stubQueue)
-			for __mockI := range this.m.fetchCfg.conditionals {
-				n += len(this.m.fetchCfg.conditionals[__mockI].stubQueue)
-			}
-			return n
-		},
-		indexer: this.m.callIndex,
-	}}
-}
-
-func (this runtimeMockCalls) History() runtimeMockHistoryCalls {
-	return runtimeMockHistoryCalls{runtimeMockCallsHelper: runtimeMockCallsHelper[RuntimeMockHistoryCall]{
-		mu:          &this.m.mu,
-		indexGetter: func(c RuntimeMockHistoryCall) int { return c.Index },
-		log:         &this.m.historyLog,
-		pendingFn: func() int {
-			n := len(this.m.historyCfg.stubQueue)
-			for __mockI := range this.m.historyCfg.conditionals {
-				n += len(this.m.historyCfg.conditionals[__mockI].stubQueue)
-			}
-			return n
-		},
-		indexer: this.m.callIndex,
-	}}
-}
-
-func (this runtimeMockCalls) Publish() runtimeMockPublishCalls {
-	return runtimeMockPublishCalls{runtimeMockCallsHelper: runtimeMockCallsHelper[RuntimeMockPublishCall]{
-		mu:          &this.m.mu,
-		indexGetter: func(c RuntimeMockPublishCall) int { return c.Index },
-		log:         &this.m.publishLog,
-		pendingFn: func() int {
-			n := len(this.m.publishCfg.stubQueue)
-			for __mockI := range this.m.publishCfg.conditionals {
-				n += len(this.m.publishCfg.conditionals[__mockI].stubQueue)
-			}
-			return n
-		},
-		indexer: this.m.callIndex,
-	}}
-}
-
-func (this runtimeMockCalls) Stats() runtimeMockStatsCalls {
-	return runtimeMockStatsCalls{runtimeMockCallsHelper: runtimeMockCallsHelper[RuntimeMockStatsCall]{
-		mu:          &this.m.mu,
-		indexGetter: func(c RuntimeMockStatsCall) int { return c.Index },
-		log:         &this.m.statsLog,
-		pendingFn: func() int {
-			n := len(this.m.statsCfg.stubQueue)
-			for __mockI := range this.m.statsCfg.conditionals {
-				n += len(this.m.statsCfg.conditionals[__mockI].stubQueue)
-			}
-			return n
-		},
-		indexer: this.m.callIndex,
-	}}
+	__mockR, _ := this.subscribeMethod.Call(this.ref("Subscribe"), RuntimeMockSubscribeParam{Ctx: ctx, Topics: topics, Handler: handler}).(RuntimeMockSubscribeReturn)
+	return __mockR.Cancel, __mockR.Err
 }
 
 func (this runtimeMockCalls) Subscribe() runtimeMockSubscribeCalls {
-	return runtimeMockSubscribeCalls{runtimeMockCallsHelper: runtimeMockCallsHelper[RuntimeMockSubscribeCall]{
-		mu:          &this.m.mu,
-		indexGetter: func(c RuntimeMockSubscribeCall) int { return c.Index },
-		log:         &this.m.subscribeLog,
-		pendingFn: func() int {
-			n := len(this.m.subscribeCfg.stubQueue)
-			for __mockI := range this.m.subscribeCfg.conditionals {
-				n += len(this.m.subscribeCfg.conditionals[__mockI].stubQueue)
-			}
-			return n
-		},
-		indexer: this.m.callIndex,
-	}}
+	return runtimeMockSubscribeCalls{this.m.subscribeMethod.AsyncCalls(this.m.ref("Subscribe"))}
 }
 
-// PendingStubs returns the total number of unconsumed Once() stub entries
-// across all methods on this mock.
-func (this runtimeMockCalls) PendingStubs() int {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	n := 0
-	n += len(this.m.activateCfg.stubQueue)
-	for __mockI := range this.m.activateCfg.conditionals {
-		n += len(this.m.activateCfg.conditionals[__mockI].stubQueue)
-	}
-	n += len(this.m.closeCfg.stubQueue)
-	for __mockI := range this.m.closeCfg.conditionals {
-		n += len(this.m.closeCfg.conditionals[__mockI].stubQueue)
-	}
-	n += len(this.m.fetchCfg.stubQueue)
-	for __mockI := range this.m.fetchCfg.conditionals {
-		n += len(this.m.fetchCfg.conditionals[__mockI].stubQueue)
-	}
-	n += len(this.m.historyCfg.stubQueue)
-	for __mockI := range this.m.historyCfg.conditionals {
-		n += len(this.m.historyCfg.conditionals[__mockI].stubQueue)
-	}
-	n += len(this.m.publishCfg.stubQueue)
-	for __mockI := range this.m.publishCfg.conditionals {
-		n += len(this.m.publishCfg.conditionals[__mockI].stubQueue)
-	}
-	n += len(this.m.statsCfg.stubQueue)
-	for __mockI := range this.m.statsCfg.conditionals {
-		n += len(this.m.statsCfg.conditionals[__mockI].stubQueue)
-	}
-	n += len(this.m.subscribeCfg.stubQueue)
-	for __mockI := range this.m.subscribeCfg.conditionals {
-		n += len(this.m.subscribeCfg.conditionals[__mockI].stubQueue)
-	}
-	return n
+type runtimeMockSubscribeCalls struct{ mockrt.AsyncCalls }
+
+func (this runtimeMockSubscribeCalls) At(i int) RuntimeMockSubscribeCall {
+	return runtimeMockSubscribeCallOf(this.AsyncCalls.At(i))
 }
 
-// Timeline returns a defensive copy of the cross-method call timeline.
-// Each entry names the source method, its per-method index, and a
-// mock-wide GlobalIndex assigned at recording time.
-func (this runtimeMockCalls) Timeline() []RuntimeMockTimelineEntry {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	out := make([]RuntimeMockTimelineEntry, len(this.m.timelineLog))
-	copy(out, this.m.timelineLog)
-	return out
+func (this runtimeMockSubscribeCalls) Last() RuntimeMockSubscribeCall { return this.At(-1) }
+func (this runtimeMockSubscribeCalls) All() []RuntimeMockSubscribeCall {
+	return mockrt.Map(this.AsyncCalls.All(), runtimeMockSubscribeCallOf)
 }
 
-// AssertOrder calls t.Errorf when the given entries were not recorded in
-// the given order. Adjacent entries with the same GlobalIndex (same call
-// passed twice) are treated as in-order. 0 or 1 entries are a no-op.
-func (this runtimeMockCalls) AssertOrder(t RuntimeMockVerifyT, entries ...RuntimeMockCall) {
-	t.Helper()
-	if len(entries) < 2 {
-		return
-	}
-	prev := entries[0].Global()
-	for i := 1; i < len(entries); i++ {
-		cur := entries[i].Global()
-		if cur < prev {
-			t.Errorf("RuntimeMock: AssertOrder violated — entry " + strconv.Itoa(i) + " (global #" + strconv.Itoa(cur) + ") happened before entry " + strconv.Itoa(i-1) + " (global #" + strconv.Itoa(prev) + ")")
-			return
-		}
-		prev = cur
-	}
+func (this runtimeMockSubscribeCalls) Any(pred func(RuntimeMockSubscribeCall) bool) bool {
+	return this.AsyncCalls.Any(mockrt.Pred(pred, runtimeMockSubscribeCallOf))
 }
 
-// RuntimeMockVerifyT is the interface Verify accepts. *testing.T satisfies it.
-type RuntimeMockVerifyT interface {
-	Helper()
-	Errorf(format string, args ...any)
+func (this runtimeMockSubscribeCalls) Filter(pred func(RuntimeMockSubscribeCall) bool) []RuntimeMockSubscribeCall {
+	return mockrt.Map(this.AsyncCalls.Filter(mockrt.Pred(pred, runtimeMockSubscribeCallOf)), runtimeMockSubscribeCallOf)
 }
 
-// Verify calls t.Errorf if any method has unconsumed Once() stub entries.
-// It does not call t.Fatal so other teardown checks still run. The mock
-// mutex is released before t.Errorf is invoked, so a user-supplied T
-// implementation can safely call back into the mock without deadlocking.
-func (this runtimeMockCalls) Verify(t RuntimeMockVerifyT) {
-	t.Helper()
-	this.m.mu.Lock()
-	total, breakdown := 0, ""
-	{
-		n := len(this.m.activateCfg.stubQueue)
-		for __mockI := range this.m.activateCfg.conditionals {
-			n += len(this.m.activateCfg.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "Activate: " + strconv.Itoa(n)
-		}
-	}
-	{
-		n := len(this.m.closeCfg.stubQueue)
-		for __mockI := range this.m.closeCfg.conditionals {
-			n += len(this.m.closeCfg.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "Close: " + strconv.Itoa(n)
-		}
-	}
-	{
-		n := len(this.m.fetchCfg.stubQueue)
-		for __mockI := range this.m.fetchCfg.conditionals {
-			n += len(this.m.fetchCfg.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "Fetch: " + strconv.Itoa(n)
-		}
-	}
-	{
-		n := len(this.m.historyCfg.stubQueue)
-		for __mockI := range this.m.historyCfg.conditionals {
-			n += len(this.m.historyCfg.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "History: " + strconv.Itoa(n)
-		}
-	}
-	{
-		n := len(this.m.publishCfg.stubQueue)
-		for __mockI := range this.m.publishCfg.conditionals {
-			n += len(this.m.publishCfg.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "Publish: " + strconv.Itoa(n)
-		}
-	}
-	{
-		n := len(this.m.statsCfg.stubQueue)
-		for __mockI := range this.m.statsCfg.conditionals {
-			n += len(this.m.statsCfg.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "Stats: " + strconv.Itoa(n)
-		}
-	}
-	{
-		n := len(this.m.subscribeCfg.stubQueue)
-		for __mockI := range this.m.subscribeCfg.conditionals {
-			n += len(this.m.subscribeCfg.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "Subscribe: " + strconv.Itoa(n)
-		}
-	}
-	this.m.mu.Unlock()
-	if total > 0 {
-		t.Errorf("RuntimeMock: " + strconv.Itoa(total) + " unconsumed stubs (" + breakdown + ")")
-	}
-}
-
-// runtimeMockActivateCalls is the per-method inspection namespace for
-// Runtime.Activate. Methods are provided by the embedded runtimeMockCallsHelper.
-type runtimeMockActivateCalls struct {
-	runtimeMockCallsHelper[RuntimeMockActivateCall]
-}
-
-// runtimeMockCloseCalls is the per-method inspection namespace for
-// Runtime.Close. Methods are provided by the embedded runtimeMockCallsHelper.
-type runtimeMockCloseCalls struct {
-	runtimeMockCallsHelper[RuntimeMockCloseCall]
-}
-
-// runtimeMockFetchCalls is the per-method inspection namespace for
-// Runtime.Fetch. Methods are provided by the embedded runtimeMockCallsHelper.
-type runtimeMockFetchCalls struct {
-	runtimeMockCallsHelper[RuntimeMockFetchCall]
-}
-
-// runtimeMockHistoryCalls is the per-method inspection namespace for
-// Runtime.History. Methods are provided by the embedded runtimeMockCallsHelper.
-type runtimeMockHistoryCalls struct {
-	runtimeMockCallsHelper[RuntimeMockHistoryCall]
-}
-
-// runtimeMockPublishCalls is the per-method inspection namespace for
-// Runtime.Publish. Methods are provided by the embedded runtimeMockCallsHelper.
-type runtimeMockPublishCalls struct {
-	runtimeMockCallsHelper[RuntimeMockPublishCall]
-}
-
-// runtimeMockStatsCalls is the per-method inspection namespace for
-// Runtime.Stats. Methods are provided by the embedded runtimeMockCallsHelper.
-type runtimeMockStatsCalls struct {
-	runtimeMockCallsHelper[RuntimeMockStatsCall]
-}
-
-// runtimeMockSubscribeCalls is the per-method inspection namespace for
-// Runtime.Subscribe. Methods are provided by the embedded runtimeMockCallsHelper.
-type runtimeMockSubscribeCalls struct {
-	runtimeMockCallsHelper[RuntimeMockSubscribeCall]
-}
-
-type runtimeMockOn struct{ m *RuntimeMock }
-
-// On returns the configuration namespace — one method per
-// interface method, each returning the per-method config object.
-func (this *RuntimeMock) On() runtimeMockOn {
-	return runtimeMockOn{m: this}
-}
-
-// Reset clears configured returns and installed handlers for every method
-// on the mock, without touching the call log.
-func (this runtimeMockOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.activateCfg = runtimeMockActivateCfg{}
-	this.m.closeCfg = runtimeMockCloseCfg{}
-	this.m.fetchCfg = runtimeMockFetchCfg{}
-	this.m.historyCfg = runtimeMockHistoryCfg{}
-	this.m.publishCfg = runtimeMockPublishCfg{}
-	this.m.statsCfg = runtimeMockStatsCfg{}
-	this.m.subscribeCfg = runtimeMockSubscribeCfg{}
-}
-
-func (this runtimeMockOn) Activate() runtimeMockActivateOn {
-	return runtimeMockActivateOn{m: this.m}
-}
-
-func (this runtimeMockOn) Close() runtimeMockCloseOn {
-	return runtimeMockCloseOn{m: this.m}
-}
-
-func (this runtimeMockOn) Fetch() runtimeMockFetchOn {
-	return runtimeMockFetchOn{m: this.m}
-}
-
-func (this runtimeMockOn) History() runtimeMockHistoryOn {
-	return runtimeMockHistoryOn{m: this.m}
-}
-
-func (this runtimeMockOn) Publish() runtimeMockPublishOn {
-	return runtimeMockPublishOn{m: this.m}
-}
-
-func (this runtimeMockOn) Stats() runtimeMockStatsOn {
-	return runtimeMockStatsOn{m: this.m}
+func (this runtimeMockSubscribeCalls) WaitForCall(pred func(RuntimeMockSubscribeCall) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, runtimeMockSubscribeCallOf), timeout)
 }
 
 func (this runtimeMockOn) Subscribe() runtimeMockSubscribeOn {
-	return runtimeMockSubscribeOn{m: this.m}
+	return runtimeMockSubscribeOn{this.m.subscribeMethod.On(this.m.ref("Subscribe"))}
 }
 
-type runtimeMockActivateOn struct{ m *RuntimeMock }
+type runtimeMockSubscribeOn struct{ mockrt.On }
 
-// ReturnAll sets all static return values for Activate
-// positionally. Used when no ReturnCustom handler is installed.
-func (this runtimeMockActivateOn) ReturnAll(error error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.activateCfg.alwaysStub != nil || len(this.m.activateCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Activate: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.activateCfg.stickySet = true
-	this.m.activateCfg.sticky.error = error
-}
-
-// Return returns the per-return setter namespace — one method per return
-// value of Activate, each overriding just that return without
-// touching the others.
-func (this runtimeMockActivateOn) Return() runtimeMockActivateReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.activateCfg.alwaysStub != nil || len(this.m.activateCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Activate: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.activateCfg.stickySet = true
-	return runtimeMockActivateReturn{m: this.m, target: &this.m.activateCfg.sticky}
-}
-
-// ReturnCustom installs a dynamic function called instead of returning the
-// configured static values.
-func (this runtimeMockActivateOn) ReturnCustom(value func(context.Context, *runtime_fixture.Trigger) error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.activateCfg.alwaysStub != nil || len(this.m.activateCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Activate: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.activateCfg.handlerSet = true
-	this.m.activateCfg.handler = value
-}
-
-// Once arms a single-call return; the stub is consumed by the next call
-// to Activate and then discarded.
-func (this runtimeMockActivateOn) Once() runtimeMockActivateReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.activateCfg.stickySet || this.m.activateCfg.handlerSet {
-		panic("RuntimeMock.Activate: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &runtimeMockActivateStub{}
-	this.m.activateCfg.stubQueue = append(this.m.activateCfg.stubQueue, __mockStub)
-	return runtimeMockActivateReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
-func (this runtimeMockActivateOn) Always() runtimeMockActivateReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.activateCfg.stickySet || this.m.activateCfg.handlerSet {
-		panic("RuntimeMock.Activate: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.activateCfg.alwaysStub = &runtimeMockActivateStub{}
-	return runtimeMockActivateReturn{m: this.m, target: this.m.activateCfg.alwaysStub}
-}
-
-// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this runtimeMockActivateOn) When(pred func(RuntimeMockActivateParam) bool) runtimeMockActivateOnWhen {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.activateCfg.conditionals = append(
-		this.m.activateCfg.conditionals,
-		&runtimeMockActivateConditional{pred: pred},
-	)
-	return runtimeMockActivateOnWhen{m: this.m, condIndex: len(this.m.activateCfg.conditionals) - 1}
-}
-
-// Reset clears configured returns and installed handler for Activate.
-func (this runtimeMockActivateOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.activateCfg = runtimeMockActivateCfg{}
-}
-
-// runtimeMockActivateReturn is the per-return setter namespace for
-// Activate. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type runtimeMockActivateReturn struct {
-	m      *RuntimeMock
-	target *runtimeMockActivateStub
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this runtimeMockActivateReturn) Return() runtimeMockActivateReturn {
-	return this
-}
-
-// Error overrides just the error return value.
-func (this runtimeMockActivateReturn) Error(value error) runtimeMockActivateReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.error = value
-	return this
-}
-
-// runtimeMockActivateOnWhen is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type runtimeMockActivateOnWhen struct {
-	m         *RuntimeMock
-	condIndex int
-}
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this runtimeMockActivateOnWhen) Once() runtimeMockActivateReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.activateCfg.conditionals) {
-		panic("RuntimeMock.Activate: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.activateCfg.conditionals[this.condIndex]
-	__mockStub := &runtimeMockActivateStub{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return runtimeMockActivateReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this runtimeMockActivateOnWhen) Always() runtimeMockActivateReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.activateCfg.conditionals) {
-		panic("RuntimeMock.Activate: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.activateCfg.conditionals[this.condIndex]
-	cond.alwaysStub = &runtimeMockActivateStub{}
-	return runtimeMockActivateReturn{m: this.m, target: cond.alwaysStub}
-}
-
-type runtimeMockCloseOn struct{ m *RuntimeMock }
-
-// ReturnAll sets all static return values for Close
-// positionally. Used when no ReturnCustom handler is installed.
-func (this runtimeMockCloseOn) ReturnAll(error error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.closeCfg.alwaysStub != nil || len(this.m.closeCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Close: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.closeCfg.stickySet = true
-	this.m.closeCfg.sticky.error = error
-}
-
-// Return returns the per-return setter namespace — one method per return
-// value of Close, each overriding just that return without
-// touching the others.
-func (this runtimeMockCloseOn) Return() runtimeMockCloseReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.closeCfg.alwaysStub != nil || len(this.m.closeCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Close: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.closeCfg.stickySet = true
-	return runtimeMockCloseReturn{m: this.m, target: &this.m.closeCfg.sticky}
-}
-
-// ReturnCustom installs a dynamic function called instead of returning the
-// configured static values.
-func (this runtimeMockCloseOn) ReturnCustom(value func() error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.closeCfg.alwaysStub != nil || len(this.m.closeCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Close: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.closeCfg.handlerSet = true
-	this.m.closeCfg.handler = value
-}
-
-// Once arms a single-call return; the stub is consumed by the next call
-// to Close and then discarded.
-func (this runtimeMockCloseOn) Once() runtimeMockCloseReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.closeCfg.stickySet || this.m.closeCfg.handlerSet {
-		panic("RuntimeMock.Close: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &runtimeMockCloseStub{}
-	this.m.closeCfg.stubQueue = append(this.m.closeCfg.stubQueue, __mockStub)
-	return runtimeMockCloseReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
-func (this runtimeMockCloseOn) Always() runtimeMockCloseReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.closeCfg.stickySet || this.m.closeCfg.handlerSet {
-		panic("RuntimeMock.Close: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.closeCfg.alwaysStub = &runtimeMockCloseStub{}
-	return runtimeMockCloseReturn{m: this.m, target: this.m.closeCfg.alwaysStub}
-}
-
-// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this runtimeMockCloseOn) When(pred func(RuntimeMockCloseParam) bool) runtimeMockCloseOnWhen {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.closeCfg.conditionals = append(
-		this.m.closeCfg.conditionals,
-		&runtimeMockCloseConditional{pred: pred},
-	)
-	return runtimeMockCloseOnWhen{m: this.m, condIndex: len(this.m.closeCfg.conditionals) - 1}
-}
-
-// Reset clears configured returns and installed handler for Close.
-func (this runtimeMockCloseOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.closeCfg = runtimeMockCloseCfg{}
-}
-
-// runtimeMockCloseReturn is the per-return setter namespace for
-// Close. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type runtimeMockCloseReturn struct {
-	m      *RuntimeMock
-	target *runtimeMockCloseStub
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this runtimeMockCloseReturn) Return() runtimeMockCloseReturn {
-	return this
-}
-
-// Error overrides just the error return value.
-func (this runtimeMockCloseReturn) Error(value error) runtimeMockCloseReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.error = value
-	return this
-}
-
-// runtimeMockCloseOnWhen is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type runtimeMockCloseOnWhen struct {
-	m         *RuntimeMock
-	condIndex int
-}
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this runtimeMockCloseOnWhen) Once() runtimeMockCloseReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.closeCfg.conditionals) {
-		panic("RuntimeMock.Close: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.closeCfg.conditionals[this.condIndex]
-	__mockStub := &runtimeMockCloseStub{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return runtimeMockCloseReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this runtimeMockCloseOnWhen) Always() runtimeMockCloseReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.closeCfg.conditionals) {
-		panic("RuntimeMock.Close: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.closeCfg.conditionals[this.condIndex]
-	cond.alwaysStub = &runtimeMockCloseStub{}
-	return runtimeMockCloseReturn{m: this.m, target: cond.alwaysStub}
-}
-
-type runtimeMockFetchOn struct{ m *RuntimeMock }
-
-// ReturnAll sets all static return values for Fetch
-// positionally. Used when no ReturnCustom handler is installed.
-func (this runtimeMockFetchOn) ReturnAll(events []runtime_fixture.Event, total int, err error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.fetchCfg.alwaysStub != nil || len(this.m.fetchCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Fetch: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.fetchCfg.stickySet = true
-	this.m.fetchCfg.sticky.events = events
-	this.m.fetchCfg.sticky.total = total
-	this.m.fetchCfg.sticky.err = err
-}
-
-// Return returns the per-return setter namespace — one method per return
-// value of Fetch, each overriding just that return without
-// touching the others.
-func (this runtimeMockFetchOn) Return() runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.fetchCfg.alwaysStub != nil || len(this.m.fetchCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Fetch: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.fetchCfg.stickySet = true
-	return runtimeMockFetchReturn{m: this.m, target: &this.m.fetchCfg.sticky}
-}
-
-// ReturnCustom installs a dynamic function called instead of returning the
-// configured static values.
-func (this runtimeMockFetchOn) ReturnCustom(value func(context.Context, []string) ([]runtime_fixture.Event, int, error)) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.fetchCfg.alwaysStub != nil || len(this.m.fetchCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Fetch: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.fetchCfg.handlerSet = true
-	this.m.fetchCfg.handler = value
-}
-
-// Once arms a single-call return; the stub is consumed by the next call
-// to Fetch and then discarded.
-func (this runtimeMockFetchOn) Once() runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.fetchCfg.stickySet || this.m.fetchCfg.handlerSet {
-		panic("RuntimeMock.Fetch: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &runtimeMockFetchStub{}
-	this.m.fetchCfg.stubQueue = append(this.m.fetchCfg.stubQueue, __mockStub)
-	return runtimeMockFetchReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
-func (this runtimeMockFetchOn) Always() runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.fetchCfg.stickySet || this.m.fetchCfg.handlerSet {
-		panic("RuntimeMock.Fetch: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.fetchCfg.alwaysStub = &runtimeMockFetchStub{}
-	return runtimeMockFetchReturn{m: this.m, target: this.m.fetchCfg.alwaysStub}
-}
-
-// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this runtimeMockFetchOn) When(pred func(RuntimeMockFetchParam) bool) runtimeMockFetchOnWhen {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.fetchCfg.conditionals = append(
-		this.m.fetchCfg.conditionals,
-		&runtimeMockFetchConditional{pred: pred},
-	)
-	return runtimeMockFetchOnWhen{m: this.m, condIndex: len(this.m.fetchCfg.conditionals) - 1}
-}
-
-// Reset clears configured returns and installed handler for Fetch.
-func (this runtimeMockFetchOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.fetchCfg = runtimeMockFetchCfg{}
-}
-
-// runtimeMockFetchReturn is the per-return setter namespace for
-// Fetch. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type runtimeMockFetchReturn struct {
-	m      *RuntimeMock
-	target *runtimeMockFetchStub
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this runtimeMockFetchReturn) Return() runtimeMockFetchReturn {
-	return this
-}
-
-// Events overrides just the events return value.
-func (this runtimeMockFetchReturn) Events(value []runtime_fixture.Event) runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.events = value
-	return this
-}
-
-// Total overrides just the total return value.
-func (this runtimeMockFetchReturn) Total(value int) runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.total = value
-	return this
-}
-
-// Err overrides just the err return value.
-func (this runtimeMockFetchReturn) Err(value error) runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.err = value
-	return this
-}
-
-// runtimeMockFetchOnWhen is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type runtimeMockFetchOnWhen struct {
-	m         *RuntimeMock
-	condIndex int
-}
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this runtimeMockFetchOnWhen) Once() runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.fetchCfg.conditionals) {
-		panic("RuntimeMock.Fetch: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.fetchCfg.conditionals[this.condIndex]
-	__mockStub := &runtimeMockFetchStub{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return runtimeMockFetchReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this runtimeMockFetchOnWhen) Always() runtimeMockFetchReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.fetchCfg.conditionals) {
-		panic("RuntimeMock.Fetch: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.fetchCfg.conditionals[this.condIndex]
-	cond.alwaysStub = &runtimeMockFetchStub{}
-	return runtimeMockFetchReturn{m: this.m, target: cond.alwaysStub}
-}
-
-type runtimeMockHistoryOn struct{ m *RuntimeMock }
-
-// ReturnAll sets all static return values for History
-// positionally. Used when no ReturnCustom handler is installed.
-func (this runtimeMockHistoryOn) ReturnAll(eventArr []runtime_fixture.Event) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.historyCfg.alwaysStub != nil || len(this.m.historyCfg.stubQueue) > 0 {
-		panic("RuntimeMock.History: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.historyCfg.stickySet = true
-	this.m.historyCfg.sticky.eventArr = eventArr
-}
-
-// Return returns the per-return setter namespace — one method per return
-// value of History, each overriding just that return without
-// touching the others.
-func (this runtimeMockHistoryOn) Return() runtimeMockHistoryReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.historyCfg.alwaysStub != nil || len(this.m.historyCfg.stubQueue) > 0 {
-		panic("RuntimeMock.History: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.historyCfg.stickySet = true
-	return runtimeMockHistoryReturn{m: this.m, target: &this.m.historyCfg.sticky}
-}
-
-// ReturnCustom installs a dynamic function called instead of returning the
-// configured static values.
-func (this runtimeMockHistoryOn) ReturnCustom(value func(time.Duration) []runtime_fixture.Event) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.historyCfg.alwaysStub != nil || len(this.m.historyCfg.stubQueue) > 0 {
-		panic("RuntimeMock.History: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.historyCfg.handlerSet = true
-	this.m.historyCfg.handler = value
-}
-
-// Once arms a single-call return; the stub is consumed by the next call
-// to History and then discarded.
-func (this runtimeMockHistoryOn) Once() runtimeMockHistoryReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.historyCfg.stickySet || this.m.historyCfg.handlerSet {
-		panic("RuntimeMock.History: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &runtimeMockHistoryStub{}
-	this.m.historyCfg.stubQueue = append(this.m.historyCfg.stubQueue, __mockStub)
-	return runtimeMockHistoryReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
-func (this runtimeMockHistoryOn) Always() runtimeMockHistoryReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.historyCfg.stickySet || this.m.historyCfg.handlerSet {
-		panic("RuntimeMock.History: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.historyCfg.alwaysStub = &runtimeMockHistoryStub{}
-	return runtimeMockHistoryReturn{m: this.m, target: this.m.historyCfg.alwaysStub}
-}
-
-// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this runtimeMockHistoryOn) When(pred func(RuntimeMockHistoryParam) bool) runtimeMockHistoryOnWhen {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.historyCfg.conditionals = append(
-		this.m.historyCfg.conditionals,
-		&runtimeMockHistoryConditional{pred: pred},
-	)
-	return runtimeMockHistoryOnWhen{m: this.m, condIndex: len(this.m.historyCfg.conditionals) - 1}
-}
-
-// Reset clears configured returns and installed handler for History.
-func (this runtimeMockHistoryOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.historyCfg = runtimeMockHistoryCfg{}
-}
-
-// runtimeMockHistoryReturn is the per-return setter namespace for
-// History. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type runtimeMockHistoryReturn struct {
-	m      *RuntimeMock
-	target *runtimeMockHistoryStub
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this runtimeMockHistoryReturn) Return() runtimeMockHistoryReturn {
-	return this
-}
-
-// EventArr overrides just the eventArr return value.
-func (this runtimeMockHistoryReturn) EventArr(value []runtime_fixture.Event) runtimeMockHistoryReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.eventArr = value
-	return this
-}
-
-// runtimeMockHistoryOnWhen is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type runtimeMockHistoryOnWhen struct {
-	m         *RuntimeMock
-	condIndex int
-}
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this runtimeMockHistoryOnWhen) Once() runtimeMockHistoryReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.historyCfg.conditionals) {
-		panic("RuntimeMock.History: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.historyCfg.conditionals[this.condIndex]
-	__mockStub := &runtimeMockHistoryStub{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return runtimeMockHistoryReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this runtimeMockHistoryOnWhen) Always() runtimeMockHistoryReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.historyCfg.conditionals) {
-		panic("RuntimeMock.History: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.historyCfg.conditionals[this.condIndex]
-	cond.alwaysStub = &runtimeMockHistoryStub{}
-	return runtimeMockHistoryReturn{m: this.m, target: cond.alwaysStub}
-}
-
-type runtimeMockPublishOn struct{ m *RuntimeMock }
-
-// ReturnAll sets all static return values for Publish
-// positionally. Used when no ReturnCustom handler is installed.
-func (this runtimeMockPublishOn) ReturnAll(event runtime_fixture.Event, error error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.publishCfg.alwaysStub != nil || len(this.m.publishCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Publish: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.publishCfg.stickySet = true
-	this.m.publishCfg.sticky.event = event
-	this.m.publishCfg.sticky.error = error
-}
-
-// Return returns the per-return setter namespace — one method per return
-// value of Publish, each overriding just that return without
-// touching the others.
-func (this runtimeMockPublishOn) Return() runtimeMockPublishReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.publishCfg.alwaysStub != nil || len(this.m.publishCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Publish: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.publishCfg.stickySet = true
-	return runtimeMockPublishReturn{m: this.m, target: &this.m.publishCfg.sticky}
-}
-
-// ReturnCustom installs a dynamic function called instead of returning the
-// configured static values.
-func (this runtimeMockPublishOn) ReturnCustom(value func(context.Context, string, []byte) (runtime_fixture.Event, error)) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.publishCfg.alwaysStub != nil || len(this.m.publishCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Publish: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.publishCfg.handlerSet = true
-	this.m.publishCfg.handler = value
-}
-
-// Once arms a single-call return; the stub is consumed by the next call
-// to Publish and then discarded.
-func (this runtimeMockPublishOn) Once() runtimeMockPublishReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.publishCfg.stickySet || this.m.publishCfg.handlerSet {
-		panic("RuntimeMock.Publish: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &runtimeMockPublishStub{}
-	this.m.publishCfg.stubQueue = append(this.m.publishCfg.stubQueue, __mockStub)
-	return runtimeMockPublishReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
-func (this runtimeMockPublishOn) Always() runtimeMockPublishReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.publishCfg.stickySet || this.m.publishCfg.handlerSet {
-		panic("RuntimeMock.Publish: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.publishCfg.alwaysStub = &runtimeMockPublishStub{}
-	return runtimeMockPublishReturn{m: this.m, target: this.m.publishCfg.alwaysStub}
-}
-
-// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this runtimeMockPublishOn) When(pred func(RuntimeMockPublishParam) bool) runtimeMockPublishOnWhen {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.publishCfg.conditionals = append(
-		this.m.publishCfg.conditionals,
-		&runtimeMockPublishConditional{pred: pred},
-	)
-	return runtimeMockPublishOnWhen{m: this.m, condIndex: len(this.m.publishCfg.conditionals) - 1}
-}
-
-// Reset clears configured returns and installed handler for Publish.
-func (this runtimeMockPublishOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.publishCfg = runtimeMockPublishCfg{}
-}
-
-// runtimeMockPublishReturn is the per-return setter namespace for
-// Publish. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type runtimeMockPublishReturn struct {
-	m      *RuntimeMock
-	target *runtimeMockPublishStub
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this runtimeMockPublishReturn) Return() runtimeMockPublishReturn {
-	return this
-}
-
-// Event overrides just the event return value.
-func (this runtimeMockPublishReturn) Event(value runtime_fixture.Event) runtimeMockPublishReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.event = value
-	return this
-}
-
-// Error overrides just the error return value.
-func (this runtimeMockPublishReturn) Error(value error) runtimeMockPublishReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.error = value
-	return this
-}
-
-// runtimeMockPublishOnWhen is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type runtimeMockPublishOnWhen struct {
-	m         *RuntimeMock
-	condIndex int
-}
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this runtimeMockPublishOnWhen) Once() runtimeMockPublishReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.publishCfg.conditionals) {
-		panic("RuntimeMock.Publish: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.publishCfg.conditionals[this.condIndex]
-	__mockStub := &runtimeMockPublishStub{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return runtimeMockPublishReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this runtimeMockPublishOnWhen) Always() runtimeMockPublishReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.publishCfg.conditionals) {
-		panic("RuntimeMock.Publish: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.publishCfg.conditionals[this.condIndex]
-	cond.alwaysStub = &runtimeMockPublishStub{}
-	return runtimeMockPublishReturn{m: this.m, target: cond.alwaysStub}
-}
-
-type runtimeMockStatsOn struct{ m *RuntimeMock }
-
-// ReturnAll sets all static return values for Stats
-// positionally. Used when no ReturnCustom handler is installed.
-func (this runtimeMockStatsOn) ReturnAll(active int, queued int, err error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.statsCfg.alwaysStub != nil || len(this.m.statsCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Stats: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.statsCfg.stickySet = true
-	this.m.statsCfg.sticky.active = active
-	this.m.statsCfg.sticky.queued = queued
-	this.m.statsCfg.sticky.err = err
-}
-
-// Return returns the per-return setter namespace — one method per return
-// value of Stats, each overriding just that return without
-// touching the others.
-func (this runtimeMockStatsOn) Return() runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.statsCfg.alwaysStub != nil || len(this.m.statsCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Stats: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.statsCfg.stickySet = true
-	return runtimeMockStatsReturn{m: this.m, target: &this.m.statsCfg.sticky}
-}
-
-// ReturnCustom installs a dynamic function called instead of returning the
-// configured static values.
-func (this runtimeMockStatsOn) ReturnCustom(value func() (int, int, error)) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.statsCfg.alwaysStub != nil || len(this.m.statsCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Stats: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.statsCfg.handlerSet = true
-	this.m.statsCfg.handler = value
-}
-
-// Once arms a single-call return; the stub is consumed by the next call
-// to Stats and then discarded.
-func (this runtimeMockStatsOn) Once() runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.statsCfg.stickySet || this.m.statsCfg.handlerSet {
-		panic("RuntimeMock.Stats: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &runtimeMockStatsStub{}
-	this.m.statsCfg.stubQueue = append(this.m.statsCfg.stubQueue, __mockStub)
-	return runtimeMockStatsReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
-func (this runtimeMockStatsOn) Always() runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.statsCfg.stickySet || this.m.statsCfg.handlerSet {
-		panic("RuntimeMock.Stats: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.statsCfg.alwaysStub = &runtimeMockStatsStub{}
-	return runtimeMockStatsReturn{m: this.m, target: this.m.statsCfg.alwaysStub}
-}
-
-// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this runtimeMockStatsOn) When(pred func(RuntimeMockStatsParam) bool) runtimeMockStatsOnWhen {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.statsCfg.conditionals = append(
-		this.m.statsCfg.conditionals,
-		&runtimeMockStatsConditional{pred: pred},
-	)
-	return runtimeMockStatsOnWhen{m: this.m, condIndex: len(this.m.statsCfg.conditionals) - 1}
-}
-
-// Reset clears configured returns and installed handler for Stats.
-func (this runtimeMockStatsOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.statsCfg = runtimeMockStatsCfg{}
-}
-
-// runtimeMockStatsReturn is the per-return setter namespace for
-// Stats. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type runtimeMockStatsReturn struct {
-	m      *RuntimeMock
-	target *runtimeMockStatsStub
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this runtimeMockStatsReturn) Return() runtimeMockStatsReturn {
-	return this
-}
-
-// Active overrides just the active return value.
-func (this runtimeMockStatsReturn) Active(value int) runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.active = value
-	return this
-}
-
-// Queued overrides just the queued return value.
-func (this runtimeMockStatsReturn) Queued(value int) runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.queued = value
-	return this
-}
-
-// Err overrides just the err return value.
-func (this runtimeMockStatsReturn) Err(value error) runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.err = value
-	return this
-}
-
-// runtimeMockStatsOnWhen is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type runtimeMockStatsOnWhen struct {
-	m         *RuntimeMock
-	condIndex int
-}
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this runtimeMockStatsOnWhen) Once() runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.statsCfg.conditionals) {
-		panic("RuntimeMock.Stats: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.statsCfg.conditionals[this.condIndex]
-	__mockStub := &runtimeMockStatsStub{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return runtimeMockStatsReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this runtimeMockStatsOnWhen) Always() runtimeMockStatsReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.statsCfg.conditionals) {
-		panic("RuntimeMock.Stats: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.statsCfg.conditionals[this.condIndex]
-	cond.alwaysStub = &runtimeMockStatsStub{}
-	return runtimeMockStatsReturn{m: this.m, target: cond.alwaysStub}
-}
-
-type runtimeMockSubscribeOn struct{ m *RuntimeMock }
-
-// ReturnAll sets all static return values for Subscribe
-// positionally. Used when no ReturnCustom handler is installed.
 func (this runtimeMockSubscribeOn) ReturnAll(cancel func(), err error) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.subscribeCfg.alwaysStub != nil || len(this.m.subscribeCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Subscribe: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.subscribeCfg.stickySet = true
-	this.m.subscribeCfg.sticky.cancel = cancel
-	this.m.subscribeCfg.sticky.err = err
+	this.SetAll(RuntimeMockSubscribeReturn{Cancel: cancel, Err: err})
 }
 
-// Return returns the per-return setter namespace — one method per return
-// value of Subscribe, each overriding just that return without
-// touching the others.
-func (this runtimeMockSubscribeOn) Return() runtimeMockSubscribeReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.subscribeCfg.alwaysStub != nil || len(this.m.subscribeCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Subscribe: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.subscribeCfg.stickySet = true
-	return runtimeMockSubscribeReturn{m: this.m, target: &this.m.subscribeCfg.sticky}
-}
-
-// ReturnCustom installs a dynamic function called instead of returning the
-// configured static values.
 func (this runtimeMockSubscribeOn) ReturnCustom(value func(context.Context, []string, func(runtime_fixture.Event) error) (func(), error)) {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.subscribeCfg.alwaysStub != nil || len(this.m.subscribeCfg.stubQueue) > 0 {
-		panic("RuntimeMock.Subscribe: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.subscribeCfg.handlerSet = true
-	this.m.subscribeCfg.handler = value
+	this.Custom(value != nil, func(p any) any {
+		var r RuntimeMockSubscribeReturn
+		r.Cancel, r.Err = value(p.(RuntimeMockSubscribeParam).Ctx, p.(RuntimeMockSubscribeParam).Topics, p.(RuntimeMockSubscribeParam).Handler)
+		return r
+	})
 }
 
-// Once arms a single-call return; the stub is consumed by the next call
-// to Subscribe and then discarded.
+func (this runtimeMockSubscribeOn) Return() runtimeMockSubscribeReturn {
+	return runtimeMockSubscribeReturn{this.On.Return()}
+}
+
 func (this runtimeMockSubscribeOn) Once() runtimeMockSubscribeReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.subscribeCfg.stickySet || this.m.subscribeCfg.handlerSet {
-		panic("RuntimeMock.Subscribe: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &runtimeMockSubscribeStub{}
-	this.m.subscribeCfg.stubQueue = append(this.m.subscribeCfg.stubQueue, __mockStub)
-	return runtimeMockSubscribeReturn{m: this.m, target: __mockStub}
+	return runtimeMockSubscribeReturn{this.On.Once()}
 }
 
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
 func (this runtimeMockSubscribeOn) Always() runtimeMockSubscribeReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.m.subscribeCfg.stickySet || this.m.subscribeCfg.handlerSet {
-		panic("RuntimeMock.Subscribe: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.subscribeCfg.alwaysStub = &runtimeMockSubscribeStub{}
-	return runtimeMockSubscribeReturn{m: this.m, target: this.m.subscribeCfg.alwaysStub}
+	return runtimeMockSubscribeReturn{this.On.Always()}
 }
 
-// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this runtimeMockSubscribeOn) When(pred func(RuntimeMockSubscribeParam) bool) runtimeMockSubscribeOnWhen {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.subscribeCfg.conditionals = append(
-		this.m.subscribeCfg.conditionals,
-		&runtimeMockSubscribeConditional{pred: pred},
-	)
-	return runtimeMockSubscribeOnWhen{m: this.m, condIndex: len(this.m.subscribeCfg.conditionals) - 1}
+func (this runtimeMockSubscribeOn) When(pred func(RuntimeMockSubscribeParam) bool) runtimeMockSubscribeOn {
+	return runtimeMockSubscribeOn{this.On.When(func(p any) bool { return pred(p.(RuntimeMockSubscribeParam)) })}
 }
 
-// Reset clears configured returns and installed handler for Subscribe.
-func (this runtimeMockSubscribeOn) Reset() {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.m.subscribeCfg = runtimeMockSubscribeCfg{}
-}
+type runtimeMockSubscribeReturn struct{ mockrt.Stub }
 
-// runtimeMockSubscribeReturn is the per-return setter namespace for
-// Subscribe. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type runtimeMockSubscribeReturn struct {
-	m      *RuntimeMock
-	target *runtimeMockSubscribeStub
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this runtimeMockSubscribeReturn) Return() runtimeMockSubscribeReturn {
-	return this
-}
-
-// Cancel overrides just the cancel return value.
+func (this runtimeMockSubscribeReturn) Return() runtimeMockSubscribeReturn { return this }
 func (this runtimeMockSubscribeReturn) Cancel(value func()) runtimeMockSubscribeReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.cancel = value
-	return this
+	return runtimeMockSubscribeReturn{mockrt.Set(this.Stub, func(r *RuntimeMockSubscribeReturn) { r.Cancel = value })}
 }
 
-// Err overrides just the err return value.
 func (this runtimeMockSubscribeReturn) Err(value error) runtimeMockSubscribeReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	this.target.err = value
-	return this
-}
-
-// runtimeMockSubscribeOnWhen is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type runtimeMockSubscribeOnWhen struct {
-	m         *RuntimeMock
-	condIndex int
-}
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this runtimeMockSubscribeOnWhen) Once() runtimeMockSubscribeReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.subscribeCfg.conditionals) {
-		panic("RuntimeMock.Subscribe: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.subscribeCfg.conditionals[this.condIndex]
-	__mockStub := &runtimeMockSubscribeStub{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return runtimeMockSubscribeReturn{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this runtimeMockSubscribeOnWhen) Always() runtimeMockSubscribeReturn {
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-	if this.condIndex >= len(this.m.subscribeCfg.conditionals) {
-		panic("RuntimeMock.Subscribe: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.subscribeCfg.conditionals[this.condIndex]
-	cond.alwaysStub = &runtimeMockSubscribeStub{}
-	return runtimeMockSubscribeReturn{m: this.m, target: cond.alwaysStub}
-}
-
-// callIndex resolves the index argument of Method_call(i)-style indexers:
-// negative i counts from the end; out-of-range i panics with a message
-// that surfaces both the original input and the log length.
-func (this *RuntimeMock) callIndex(length, i int) int {
-	resolved := i
-	if resolved < 0 {
-		resolved += length
-	}
-	if resolved < 0 || resolved >= length {
-		if i < 0 {
-			panic("RuntimeMock call index " + strconv.Itoa(i) + " (resolved to " + strconv.Itoa(resolved) + ") out of range, log has " + strconv.Itoa(length) + " entries")
-		}
-		panic("RuntimeMock call index " + strconv.Itoa(i) + " out of range, log has " + strconv.Itoa(length) + " entries")
-	}
-	return resolved
+	return runtimeMockSubscribeReturn{mockrt.Set(this.Stub, func(r *RuntimeMockSubscribeReturn) { r.Err = value })}
 }

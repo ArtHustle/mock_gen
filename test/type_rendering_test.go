@@ -454,7 +454,7 @@ type Service interface {
 	Log(values ...int) error
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("handler func([]int) error"))
+		Expect(out).To(ContainSubstring("ReturnCustom(value func([]int) error)"))
 	})
 
 	It("named multi-returns drop their names in the handler type", func() {
@@ -464,7 +464,7 @@ type Service interface {
 	Fetch(id int) (name string, age int, err error)
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("handler func(int) (string, int, error)"))
+		Expect(out).To(ContainSubstring("ReturnCustom(value func(int) (string, int, error))"))
 	})
 
 	// --- async-gated emission ---
@@ -476,19 +476,16 @@ type Service interface {
 	Send(x int) error
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
-		// Check for the method declarations specifically, not mere mentions
-		// (the Call struct's doc comment references WaitForCall as a use case
-		// for the Index field).
-		Expect(out).NotTo(ContainSubstring(") WaitForCount("),
-			"WaitForCount method must only be emitted under --async")
+		Expect(out).To(ContainSubstring("type serviceMockSendCalls struct{ mockrt.Calls }"))
+		Expect(out).NotTo(ContainSubstring("mockrt.AsyncCalls"),
+			"WaitForCount must only be reachable under --async")
 		Expect(out).NotTo(ContainSubstring(") WaitForCall("),
-			"WaitForCall method must only be emitted under --async")
-		// No `time` or `errors` imports either when not needed.
+			"WaitForCall must only be emitted under --async")
 		Expect(out).NotTo(ContainSubstring(`"time"`))
 		Expect(out).NotTo(ContainSubstring(`"errors"`))
 	})
 
-	It("WaitForCount and WaitForCall ARE emitted with --async, on the shared generic helper", func() {
+	It("WaitForCount and WaitForCall ARE reachable with --async", func() {
 		out, err := GenerateMockContentWithOptions(`package pkg
 
 type Service interface {
@@ -496,14 +493,11 @@ type Service interface {
 	Close() error
 }`, Options{Async: true})
 		Expect(err).NotTo(HaveOccurred())
-		// With the generic helper refactor, WaitForCount/WaitForCall live on
-		// serviceMockCallsHelper[CT] (per-mock name) and are promoted to each
-		// per-method Calls type.
-		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) WaitForCount(n int, timeout time.Duration) error"))
-		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) WaitForCall(predicate func(CT) bool, timeout time.Duration) error"))
-		// Verify each method's Calls type embeds the helper (and thus has the methods promoted).
-		Expect(out).To(ContainSubstring("type serviceMockSendCalls struct {"))
-		Expect(out).To(ContainSubstring("type serviceMockCloseCalls struct {"))
+		// WaitForCount is promoted from mockrt.AsyncCalls; WaitForCall is
+		// typed to the method's Call struct.
+		Expect(out).To(ContainSubstring("type serviceMockSendCalls struct{ mockrt.AsyncCalls }"))
+		Expect(out).To(ContainSubstring("func (this serviceMockSendCalls) WaitForCall(pred func(ServiceMockSendCall) bool, timeout time.Duration) error"))
+		Expect(out).To(ContainSubstring("func (this serviceMockCloseCalls) WaitForCall(pred func(ServiceMockCloseCall) bool, timeout time.Duration) error"))
 	})
 
 	// --- per-method config setter emission ---
@@ -515,38 +509,13 @@ type Service interface {
 	Tick()
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).NotTo(ContainSubstring(") ReturnAll("),
-			"ReturnAll must not be emitted for a method with no returns")
-		Expect(out).NotTo(ContainSubstring(") Return()"),
-			"Return() per-return namespace must not be emitted for a method with no returns")
-		Expect(out).NotTo(ContainSubstring(") ReturnCustom("),
-			"ReturnCustom must not be emitted for a method with no returns")
-		// The per-return setter type itself must not be declared either.
-		Expect(out).NotTo(ContainSubstring("serviceMockTickReturn struct{ m"),
+		// mockrt.OnVoid has only Reset: no ReturnAll/Return/ReturnCustom,
+		// Once/Always or When — there's nothing to arm or conditionalize.
+		Expect(out).To(ContainSubstring("func (this serviceMockOn) Tick() mockrt.OnVoid"))
+		Expect(out).NotTo(ContainSubstring("serviceMockTickOn"),
+			"no per-method config type is declared for a method with no returns")
+		Expect(out).NotTo(ContainSubstring("type serviceMockTickReturn struct"),
 			"the per-return setter type must not be declared for a method with no returns")
-		// Reset still exists on the per-method config object.
-		Expect(out).To(ContainSubstring("func (this serviceMockTickOn) Reset()"))
-		// Once(), Always(), and PendingStubs() must not be emitted for a method with no returns.
-		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickOn) Once()"),
-			"Once() must not be emitted for a method with no returns")
-		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickOn) Always()"),
-			"Always() must not be emitted for a method with no returns")
-		// PendingStubs is provided by the embedded mockCallsHelper (returns 0 for
-		// no-return methods), not as a direct declaration on the per-method type.
-		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickCalls) PendingStubs()"),
-			"PendingStubs() must not be a direct declaration on the per-method inspect type")
-		// The stub type itself must not be declared.
-		Expect(out).NotTo(ContainSubstring("serviceMockTickStub"),
-			"stub struct must not be declared for a method with no returns")
-		// When() must not be emitted for a method with no returns —
-		// there's nothing to conditionalize.
-		Expect(out).NotTo(ContainSubstring("func (this serviceMockTickOn) When("),
-			"When() must not be emitted for a method with no returns")
-		// The conditional struct and conditional namespace must not be declared.
-		Expect(out).NotTo(ContainSubstring("serviceMockTickConditional"),
-			"conditional struct must not be declared for a method with no returns")
-		Expect(out).NotTo(ContainSubstring("serviceMockTickOnWhen"),
-			"conditional namespace must not be declared for a method with no returns")
 	})
 
 	It("a single-return method emits ReturnAll, Return().<Name>, and ReturnCustom (no arity-1 special case)", func() {
@@ -557,20 +526,16 @@ type Service interface {
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) ReturnAll(string string)"))
-		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Return() serviceMockGreetReturn"))
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) ReturnCustom(value func(string) string)"))
-		// Per-slot setters return the setter type (chainable), not void.
-		Expect(out).To(ContainSubstring("func (this serviceMockGreetReturn) String(value string) serviceMockGreetReturn"))
-		// Once() and Always() must be emitted, both returning the per-return setter.
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Return() serviceMockGreetReturn"))
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Once() serviceMockGreetReturn"))
 		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) Always() serviceMockGreetReturn"))
-		// When() must be emitted with a predicate typed over the method's ParamType,
-		// returning the conditional namespace.
-		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) When(pred func(ServiceMockGreetParam) bool) serviceMockGreetOnWhen"))
-		// The conditional namespace exposes Once() and Always(), both returning
-		// the per-return setter (same shape as the unconditional pair).
-		Expect(out).To(ContainSubstring("func (this serviceMockGreetOnWhen) Once() serviceMockGreetReturn"))
-		Expect(out).To(ContainSubstring("func (this serviceMockGreetOnWhen) Always() serviceMockGreetReturn"))
+		// When(pred) returns the same config type scoped to the conditional;
+		// its Once()/Always() arm the conditional.
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetOn) When(pred func(ServiceMockGreetParam) bool) serviceMockGreetOn"))
+		// Per-slot setters return the setter type (chainable), not void.
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetReturn) String(value string) serviceMockGreetReturn"))
+		Expect(out).To(ContainSubstring("func (this serviceMockGreetReturn) Return() serviceMockGreetReturn"))
 	})
 
 	It("emits the v0.14 timeline surface: per-mock interface, entry type, Timeline + AssertOrder on inspect, GlobalIndex on CallType", func() {
@@ -580,31 +545,34 @@ type Service interface {
 	Send(email string) (id string, err error)
 }`, Options{})
 		Expect(err).NotTo(HaveOccurred())
-		// Per-mock interface and timeline entry are declared at package scope.
-		Expect(out).To(ContainSubstring("type ServiceMockCall interface {"))
-		Expect(out).To(ContainSubstring("type ServiceMockTimelineEntry struct {"))
-		// Timeline entry implements the call interface via Global() + HappenedBefore.
-		Expect(out).To(ContainSubstring("func (this ServiceMockTimelineEntry) Global() int"))
-		Expect(out).To(ContainSubstring("func (this ServiceMockTimelineEntry) HappenedBefore(other ServiceMockCall) bool"))
-		// Per-method <CallType> carries GlobalIndex and the same methods.
-		Expect(out).To(ContainSubstring("GlobalIndex int"))
+		// The per-mock interface, entry and T names are aliases of the
+		// runtime types; the per-method Call struct is concrete.
+		Expect(out).To(ContainSubstring("ServiceMockCall          = mockrt.Call"))
+		Expect(out).To(ContainSubstring("ServiceMockTimelineEntry = mockrt.TimelineEntry"))
+		Expect(out).To(ContainSubstring("ServiceMockVerifyT       = mockrt.T"))
+		Expect(out).To(ContainSubstring("type ServiceMockSendCall struct {\n\tIndex       int\n\tGlobalIndex int"))
 		Expect(out).To(ContainSubstring("func (this ServiceMockSendCall) Global() int"))
 		Expect(out).To(ContainSubstring("func (this ServiceMockSendCall) HappenedBefore(other ServiceMockCall) bool"))
-		// Mock-level Timeline and AssertOrder on the inspect namespace.
-		Expect(out).To(ContainSubstring("func (this serviceMockCalls) Timeline() []ServiceMockTimelineEntry"))
-		Expect(out).To(ContainSubstring("func (this serviceMockCalls) AssertOrder(t ServiceMockVerifyT, entries ...ServiceMockCall)"))
+		// Timeline and AssertOrder are promoted from the embedded mockrt.MockCalls.
+		Expect(out).To(ContainSubstring("type serviceMockCalls struct {\n\tmockrt.MockCalls"))
 	})
 
-	It("emits Any and Filter on the generic CallsHelper", func() {
-		out, err := GenerateMockContentWithOptions(`package pkg
+	It("rejects an interface method that would collide with an embedded runtime namespace", func() {
+		_, err := GenerateMockContentWithOptions(`package pkg
 
 type Service interface {
-	Send(email string) error
+	MockCalls() int
 }`, Options{})
-		Expect(err).NotTo(HaveOccurred())
-		// Methods live on the generic helper, parameterized by CT.
-		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) Any(pred func(CT) bool) bool"))
-		Expect(out).To(ContainSubstring("func (this serviceMockCallsHelper[CT]) Filter(pred func(CT) bool) []CT"))
+		Expect(err).To(MatchError(ContainSubstring(`declares method "MockCalls" which collides with the runtime namespace`)))
+	})
+
+	It("rejects a return value named Stub, which would collide with the setter's embedded mockrt.Stub", func() {
+		_, err := GenerateMockContentWithOptions(`package pkg
+
+type Service interface {
+	Find() (stub string, err error)
+}`, Options{})
+		Expect(err).To(MatchError(ContainSubstring(`has a return value named "Stub"`)))
 	})
 
 	It("non-empty inline interface renders methods inline", func() {

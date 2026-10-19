@@ -294,8 +294,8 @@ type Service interface {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(out)).To(ContainSubstring("sync.Mutex"),
 				"--async should emit a mutex")
-			Expect(string(out)).To(ContainSubstring("WaitForCount"),
-				"--async should emit WaitForCount")
+			Expect(string(out)).To(ContainSubstring("struct{ mockrt.AsyncCalls }"),
+				"--async should hand out the Calls namespace with WaitForCount")
 		})
 
 		It("rejects the old --thread-safe flag with a clean error", func() {
