@@ -7,237 +7,19 @@
 {{end}})
 
 {{end}}{{range $iface := .Interfaces}}{{/* ============================================================
-   {{$iface.CallsHelperType}} is a per-mock generic type emitted once per
-   generated mock. It holds the per-method state pointers that every per-method
-   <X>Calls type needs, and provides the shared method bodies (Count,
-   At, Last, All, Reset, PendingStubs, and — when --async — WaitForCount
-   and WaitForCall).
-
-   Naming is per-mock (e.g. "serviceMockCallsHelper") so two mocks in
-   the same package never collide, even when generated from separate source
-   files.
-   ============================================================ */}}
-type {{$iface.CallsHelperType}}[CT any] struct {
-{{- if $.Options.Async}}
-	mu *sync.Mutex
-{{end}}	log         *[]CT
-	pendingFn   func() int
-	indexer     func(length, i int) int
-{{- if $.Options.Async}}
-	indexGetter func(CT) int
-{{end}}
-}
-
-// Count returns the number of recorded calls.
-func (this {{$iface.CallsHelperType}}[CT]) Count() int {
-{{- if $.Options.Async}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	return len(*this.log)
-}
-
-// At returns the i-th recorded call. Negative i counts from the end.
-// Panics on out-of-range with a message that surfaces both the input
-// and the log length.
-func (this {{$iface.CallsHelperType}}[CT]) At(i int) CT {
-{{- if $.Options.Async}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	return (*this.log)[this.indexer(len(*this.log), i)]
-}
-
-// Last is sugar for At(-1).
-func (this {{$iface.CallsHelperType}}[CT]) Last() CT {
-	return this.At(-1)
-}
-
-// All returns a defensive copy of the full call log.
-func (this {{$iface.CallsHelperType}}[CT]) All() []CT {
-{{- if $.Options.Async}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	out := make([]CT, len(*this.log))
-	copy(out, *this.log)
-	return out
-}
-
-// Reset clears the call log.
-func (this {{$iface.CallsHelperType}}[CT]) Reset() {
-{{- if $.Options.Async}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	*this.log = nil
-}
-
-// PendingStubs returns the number of unconsumed Once() stub entries.
-// Returns 0 for methods with no return values.
-func (this {{$iface.CallsHelperType}}[CT]) PendingStubs() int {
-{{- if $.Options.Async}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	return this.pendingFn()
-}
-
-// Any returns true iff at least one recorded call satisfies pred.
-// Pred runs after All() returns (no lock held); pred may safely call
-// back into the mock without deadlocking.
-func (this {{$iface.CallsHelperType}}[CT]) Any(pred func(CT) bool) bool {
-	if pred == nil {
-		panic("{{$iface.CallsHelperType}}.Any: predicate is nil")
-	}
-	for _, c := range this.All() {
-		if pred(c) {
-			return true
-		}
-	}
-	return false
-}
-
-// Filter returns every recorded call satisfying pred, in invocation order.
-// Returns an empty (non-nil) slice when no call matches. Pred runs after
-// All() returns; pred may safely call back into the mock.
-func (this {{$iface.CallsHelperType}}[CT]) Filter(pred func(CT) bool) []CT {
-	if pred == nil {
-		panic("{{$iface.CallsHelperType}}.Filter: predicate is nil")
-	}
-	out := []CT{}
-	for _, c := range this.All() {
-		if pred(c) {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-{{if $.Options.Async}}// WaitForCount blocks until at least n calls have been recorded, or until
-// timeout elapses. Returns nil on success, an error describing the current
-// count on timeout. Polls every 1ms.
-//
-// Implemented in terms of WaitForCall with an Index-based predicate; the
-// timeout error is rebuilt so it surfaces n and the current count.
-func (this {{$iface.CallsHelperType}}[CT]) WaitForCount(n int, timeout time.Duration) error {
-	if n <= 0 {
-		return nil
-	}
-	if err := this.WaitForCall(func(c CT) bool { return this.indexGetter(c) >= n-1 }, timeout); err != nil {
-		return errors.New("WaitForCount(" + strconv.Itoa(n) + ", " + timeout.String() + "): timed out, count = " + strconv.Itoa(this.Count()))
-	}
-	return nil
-}
-
-// WaitForCall blocks until at least one recorded call satisfies the
-// predicate, or until timeout elapses. Returns nil on success, an error on
-// timeout. Polls every 1ms; on each poll, scans every recorded call from
-// oldest to newest.
-func (this {{$iface.CallsHelperType}}[CT]) WaitForCall(predicate func(CT) bool, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if slices.ContainsFunc(this.All(), predicate) {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return errors.New("WaitForCall(" + timeout.String() + "): timed out, no matching call in " + strconv.Itoa(this.Count()) + " recorded entries")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-{{end}}
-// {{$iface.CallInterfaceType}} is satisfied by every per-method <CallType>
-// and by {{$iface.TimelineEntryType}}. Enables HappenedBefore comparisons
-// across concrete call types.
-type {{$iface.CallInterfaceType}} interface {
-    Global() int
-}
-
-// {{$iface.TimelineEntryType}} records one call across any method in
-// invocation order. Method names the source method; Index is the
-// per-method position at the time the call was recorded; GlobalIndex is
-// monotonically increasing across all methods.
-type {{$iface.TimelineEntryType}} struct {
-    Method      string
-    Index       int
-    GlobalIndex int
-}
-
-// Global returns the global ordering position for this entry.
-func (this {{$iface.TimelineEntryType}}) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this entry was recorded before other.
-func (this {{$iface.TimelineEntryType}}) HappenedBefore(other {{$iface.CallInterfaceType}}) bool {
-    return this.GlobalIndex < other.Global()
-}
-
-{{/* ============================================
-   Per-method record + sub-struct + config-struct types.
-   Emitted at file scope so they're public consumption types.
-   =========================================================== */}}
-{{range $method := $iface.Methods}}// {{$method.CallType}} records one call to {{$iface.Name}}.{{$method.Name}}.
-// Index is the 0-based position of this call in the per-method log, useful
-// for ordering assertions in WaitForCall predicates and All() iteration.
-// Index resets to 0 when the log is cleared via Reset. GlobalIndex is the
-// mock-wide position assigned when the call was recorded; see Timeline().
-type {{$method.CallType}} struct {
-	Index       int
-	GlobalIndex int
-	Param       {{$method.ParamType}}
-	Return      {{$method.ReturnType}}
-}
-
-// Global returns the mock-wide ordering position for this call.
-func (this {{$method.CallType}}) Global() int { return this.GlobalIndex }
-
-// HappenedBefore returns true iff this call was recorded before other.
-func (this {{$method.CallType}}) HappenedBefore(other {{$iface.CallInterfaceType}}) bool {
-	return this.GlobalIndex < other.Global()
-}
-
-type {{$method.ParamType}} struct {
-{{range $method.ParamFields}}	{{.Name}} {{.Type}}
-{{end}}}
-
-type {{$method.ReturnType}} struct {
-{{range $method.ReturnFields}}	{{.Name}} {{.Type}}
-{{end}}}
-
-{{if $method.StubType}}// {{$method.StubType}} holds one set of return values — used for sticky cfg,
-// Once() queue entries, and Always() fallback. Queue entries and
-// conditional Always slots are referenced through pointers so per-slot
-// setters held across subsequent armings remain valid.
-type {{$method.StubType}} struct {
-{{range $method.CfgReturnFields}}	{{.Name}} {{.Type}}
-{{end}}}
-
-// {{$method.ConditionalType}} is per-method conditional state — one entry
-// per When() registration. The outer slice holds *Conditional (rather than
-// values) so the conditional's own fields stay at a stable address across
-// subsequent When() registrations.
-type {{$method.ConditionalType}} struct {
-	pred       func({{$method.ParamType}}) bool
-	stubQueue  []*{{$method.StubType}}
-	alwaysStub *{{$method.StubType}}
-}
-
-{{end}}type {{$method.CfgType}} struct {
-	sticky    {{if $method.StubType}}{{$method.StubType}}{{else}}struct{}{{end}}
-	stickySet bool
-{{if $method.StubType}}	stubQueue    []*{{$method.StubType}}
-	alwaysStub   *{{$method.StubType}}
-	conditionals []*{{$method.ConditionalType}}
-{{end}}{{if $method.HandlerFieldName}}	handlerSet bool
-
-	handler {{$method.HandlerType}}
-{{end}}}
-
-{{end}}{{/* ===== Mock struct ===== */}}
+   The shared logic (call log, timeline, stubs, When dispatch, Reset,
+   pending-stub accounting, locking) lives in the mockrt package. Each mock
+   declares only what needs its concrete types: the Param/Return structs,
+   the interface methods, the namespace accessors, ReturnAll/ReturnCustom
+   and the per-return setters.
+   ============================================================ */}}// {{$iface.MockName}} implements {{$iface.Name}}. Inspect recorded calls through
+// {{$iface.InspectEntryName}}() and configure returns through {{$iface.ConfigEntryName}}().
 type {{$iface.MockName}} struct {
 {{- if $.Options.Async}}
 	mu sync.Mutex
-{{end}}	{{$iface.GlobalCounterField}} int
-	{{$iface.TimelineLogField}}        []{{$iface.TimelineEntryType}}
-{{range $method := $iface.Methods}}
-	{{$method.LogField}} []{{$method.CallType}}
-	{{$method.CfgField}} {{$method.CfgType}}
+{{- end}}
+	rt mockrt.Mock
+{{range $method := $iface.Methods}}	{{$method.StateField}} mockrt.Method
 {{end}}}
 
 // New{{$iface.MockName}} returns a zero-valued {{$iface.MockName}}. Equivalent
@@ -247,431 +29,139 @@ func New{{$iface.MockName}}() *{{$iface.MockName}} {
 	return &{{$iface.MockName}}{}
 }
 
-{{/* ===== Interface methods ===== */}}
-{{range $method := $iface.Methods}}func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
-{{- if $method.ReturnFields}}
-{{- if $.Options.Async}}
-	this.mu.Lock()
-{{end}}	__mockParam := {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} }
-	__mockGlobal := this.{{$iface.GlobalCounterField}}
-	this.{{$iface.GlobalCounterField}}++
-	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
-		Index:       len(this.{{$method.LogField}}),
-		GlobalIndex: __mockGlobal,
-		Param:       __mockParam,
-	})
-	__mockCallIdx := len(this.{{$method.LogField}}) - 1
-	this.{{$iface.TimelineLogField}} = append(this.{{$iface.TimelineLogField}}, {{$iface.TimelineEntryType}}{
-		Method:      "{{$method.Name}}",
-		Index:       __mockCallIdx,
-		GlobalIndex: __mockGlobal,
-	})
-	__mockHandler := this.{{$method.CfgField}}.{{$method.HandlerFieldName}}
-	var __mockSource {{$method.StubType}}
-	__mockMatched := false
-	if len(this.{{$method.CfgField}}.conditionals) > 0 {
-		__mockFirstMatch := -1
-		__mockSecondMatch := -1
-		__mockMatchCount := 0
-		for __mockIdx := range this.{{$method.CfgField}}.conditionals {
-			if this.{{$method.CfgField}}.conditionals[__mockIdx].pred(__mockParam) {
-				__mockMatchCount++
-				if __mockFirstMatch == -1 {
-					__mockFirstMatch = __mockIdx
-				} else if __mockSecondMatch == -1 {
-					__mockSecondMatch = __mockIdx
-				}
-			}
-		}
-		if __mockMatchCount >= 2 {
-			{{- if $.Options.Async}}this.mu.Unlock()
-			{{end}}panic("{{$iface.MockName}}.{{$method.Name}}: call matched " + strconv.Itoa(__mockMatchCount) + " When predicates (indices " + strconv.Itoa(__mockFirstMatch) + " and " + strconv.Itoa(__mockSecondMatch) + "); refine the predicates or remove the overlap")
-		}
-		if __mockMatchCount == 1 && __mockHandler == nil {
-			__mockCond := this.{{$method.CfgField}}.conditionals[__mockFirstMatch]
-			if len(__mockCond.stubQueue) > 0 {
-				__mockSource = *__mockCond.stubQueue[0]
-				__mockCond.stubQueue = __mockCond.stubQueue[1:]
-				__mockMatched = true
-			} else if __mockCond.alwaysStub != nil {
-				__mockSource = *__mockCond.alwaysStub
-				__mockMatched = true
-			}
-		}
-	}
-	if !__mockMatched && __mockHandler == nil {
-		if len(this.{{$method.CfgField}}.stubQueue) > 0 {
-			__mockSource = *this.{{$method.CfgField}}.stubQueue[0]
-			this.{{$method.CfgField}}.stubQueue = this.{{$method.CfgField}}.stubQueue[1:]
-		} else if this.{{$method.CfgField}}.alwaysStub != nil {
-			__mockSource = *this.{{$method.CfgField}}.alwaysStub
-		} else {
-			__mockSource = this.{{$method.CfgField}}.sticky
-		}
-	}
-{{range $i, $rf := $method.CfgReturnFields}}	__mockR{{$i}} := __mockSource.{{$rf.Name}}
-{{end}}{{- if $.Options.Async}}	this.mu.Unlock()
+type (
+	{{$iface.CallInterfaceType}} = mockrt.Call
+	{{$iface.TimelineEntryType}} = mockrt.TimelineEntry
+	{{$iface.MockName}}VerifyT = mockrt.T
+)
 
-{{end}}{{range $i, $rf := $method.ReturnFields}}	var __mockRet{{$i}} {{$rf.Type}}
-{{end}}	if __mockHandler != nil {
-		{{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}} = __mockHandler({{range $i, $pn := $method.Signature.ParamNames}}{{if $i}}, {{end}}{{$pn}}{{end}})
-	} else {
-		{{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}} = {{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockR{{$i}}{{end}}
-	}
+func (this *{{$iface.MockName}}) ref(method string) mockrt.Ref {
+	return mockrt.Ref{Mock: &this.rt, {{if $.Options.Async}}Mu: &this.mu, {{end}}Name: "{{$iface.MockName}}", Method: method}
+}
 
-{{if $.Options.Async}}	this.mu.Lock()
-{{end}}	if __mockCallIdx < len(this.{{$method.LogField}}) {
-		this.{{$method.LogField}}[__mockCallIdx].Return = {{$method.ReturnType}}{ {{- range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}{{$rf.Name}}: __mockRet{{$i}}{{end}} }
-	}
-{{- if $.Options.Async}}
-	this.mu.Unlock()
-{{end}}
-	return {{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockRet{{$i}}{{end}}
-{{else}}
-{{- if $.Options.Async}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	__mockGlobal := this.{{$iface.GlobalCounterField}}
-	this.{{$iface.GlobalCounterField}}++
-	this.{{$method.LogField}} = append(this.{{$method.LogField}}, {{$method.CallType}}{
-		Index:       len(this.{{$method.LogField}}),
-		GlobalIndex: __mockGlobal,
-		Param:       {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} },
-	})
-	this.{{$iface.TimelineLogField}} = append(this.{{$iface.TimelineLogField}}, {{$iface.TimelineEntryType}}{
-		Method:      "{{$method.Name}}",
-		Index:       len(this.{{$method.LogField}}) - 1,
-		GlobalIndex: __mockGlobal,
-	})
-{{end}}}
+func (this *{{$iface.MockName}}) group() mockrt.Group {
+	return mockrt.Group{Ref: this.ref(""), Methods: []mockrt.Named{
+{{range $method := $iface.Methods}}		{Name: "{{$method.Name}}", Method: &this.{{$method.StateField}}},
+{{end}}	}}
+}
 
-{{end}}{{/* ===== Reset (mock-level) ===== */}}
-func (this *{{$iface.MockName}}) Reset() {
-{{- if $.Options.Async}}
-	this.mu.Lock()
-	defer this.mu.Unlock()
-{{end}}	this.{{$iface.GlobalCounterField}} = 0
-	this.{{$iface.TimelineLogField}} = nil
-{{range $method := $iface.Methods}}	this.{{$method.LogField}} = nil
-	this.{{$method.CfgField}} = {{$method.CfgType}}{}
-{{end}}}
+// Reset clears every call log, the timeline and every configured return.
+func (this *{{$iface.MockName}}) Reset() { this.group().Reset() }
 
-{{/* ===== Inspection namespace ===== */}}
-type {{$iface.InspectType}} struct{ m *{{$iface.MockName}} }
+type {{$iface.InspectType}} struct {
+	mockrt.MockCalls
+	m *{{$iface.MockName}}
+}
 
 // {{$iface.InspectEntryName}} returns the inspection namespace — one method per
 // interface method, each returning per-call records of {{$iface.Name}}.
 func (this *{{$iface.MockName}}) {{$iface.InspectEntryName}}() {{$iface.InspectType}} {
-	return {{$iface.InspectType}}{m: this}
+	return {{$iface.InspectType}}{this.group().MockCalls(), this}
 }
 
-// Reset clears every per-method call log on the mock and the cross-method
-// timeline, without touching configured returns or installed handlers.
-func (this {{$iface.InspectType}}) Reset() {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	this.m.{{$iface.GlobalCounterField}} = 0
-	this.m.{{$iface.TimelineLogField}} = nil
-{{range $method := $iface.Methods}}	this.m.{{$method.LogField}} = nil
-{{end}}}
-
-{{range $method := $iface.Methods}}func (this {{$iface.InspectType}}) {{$method.Name}}() {{$method.InspectMethodType}} {
-	return {{$method.InspectMethodType}}{ {{$iface.CallsHelperType}}: {{$iface.CallsHelperType}}[{{$method.CallType}}]{
-{{- if $.Options.Async}}
-		mu:          &this.m.mu,
-		indexGetter: func(c {{$method.CallType}}) int { return c.Index },
-{{end}}		log:       &this.m.{{$method.LogField}},
-		pendingFn: func() int {
-			{{if $method.StubType -}}
-			n := len(this.m.{{$method.CfgField}}.stubQueue)
-			for __mockI := range this.m.{{$method.CfgField}}.conditionals {
-				n += len(this.m.{{$method.CfgField}}.conditionals[__mockI].stubQueue)
-			}
-			return n
-			{{- else}}return 0{{end}}
-		},
-		indexer:   this.m.callIndex,
-	}}
+type {{$iface.ConfigType}} struct {
+	mockrt.MockOn
+	m *{{$iface.MockName}}
 }
-
-{{end}}{{/* ===== PendingStubs (mock-level) ===== */}}
-// PendingStubs returns the total number of unconsumed Once() stub entries
-// across all methods on this mock.
-func (this {{$iface.InspectType}}) PendingStubs() int {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	n := 0
-{{range $method := $iface.Methods}}{{if $method.StubType}}	n += len(this.m.{{$method.CfgField}}.stubQueue)
-	for __mockI := range this.m.{{$method.CfgField}}.conditionals {
-		n += len(this.m.{{$method.CfgField}}.conditionals[__mockI].stubQueue)
-	}
-{{end}}{{end}}	return n
-}
-
-// Timeline returns a defensive copy of the cross-method call timeline.
-// Each entry names the source method, its per-method index, and a
-// mock-wide GlobalIndex assigned at recording time.
-func (this {{$iface.InspectType}}) Timeline() []{{$iface.TimelineEntryType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	out := make([]{{$iface.TimelineEntryType}}, len(this.m.{{$iface.TimelineLogField}}))
-	copy(out, this.m.{{$iface.TimelineLogField}})
-	return out
-}
-
-// AssertOrder calls t.Errorf when the given entries were not recorded in
-// the given order. Adjacent entries with the same GlobalIndex (same call
-// passed twice) are treated as in-order. 0 or 1 entries are a no-op.
-func (this {{$iface.InspectType}}) AssertOrder(t {{$iface.MockName}}VerifyT, entries ...{{$iface.CallInterfaceType}}) {
-	t.Helper()
-	if len(entries) < 2 {
-		return
-	}
-	prev := entries[0].Global()
-	for i := 1; i < len(entries); i++ {
-		cur := entries[i].Global()
-		if cur < prev {
-			t.Errorf("{{$iface.MockName}}: AssertOrder violated — entry " + strconv.Itoa(i) + " (global #" + strconv.Itoa(cur) + ") happened before entry " + strconv.Itoa(i-1) + " (global #" + strconv.Itoa(prev) + ")")
-			return
-		}
-		prev = cur
-	}
-}
-
-// {{$iface.MockName}}VerifyT is the interface Verify accepts. *testing.T satisfies it.
-type {{$iface.MockName}}VerifyT interface {
-	Helper()
-	Errorf(format string, args ...any)
-}
-
-// Verify calls t.Errorf if any method has unconsumed Once() stub entries.
-// It does not call t.Fatal so other teardown checks still run. The mock
-// mutex is released before t.Errorf is invoked, so a user-supplied T
-// implementation can safely call back into the mock without deadlocking.
-func (this {{$iface.InspectType}}) Verify(t {{$iface.MockName}}VerifyT) {
-	t.Helper()
-{{if $.Options.Async}}	this.m.mu.Lock()
-{{end}}	total, breakdown := 0, ""
-{{range $method := $iface.Methods}}{{if $method.StubType}}	{
-		n := len(this.m.{{$method.CfgField}}.stubQueue)
-		for __mockI := range this.m.{{$method.CfgField}}.conditionals {
-			n += len(this.m.{{$method.CfgField}}.conditionals[__mockI].stubQueue)
-		}
-		if n > 0 {
-			total += n
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += "{{$method.Name}}: " + strconv.Itoa(n)
-		}
-	}
-{{end}}{{end}}{{if $.Options.Async}}	this.m.mu.Unlock()
-{{end}}	if total > 0 {
-		t.Errorf("{{$iface.MockName}}: " + strconv.Itoa(total) + " unconsumed stubs (" + breakdown + ")")
-	}
-}
-
-{{/* ===== Per-method inspection types ===== */}}
-{{range $method := $iface.Methods}}// {{$method.InspectMethodType}} is the per-method inspection namespace for
-// {{$iface.Name}}.{{$method.Name}}. Methods are provided by the embedded {{$iface.CallsHelperType}}.
-type {{$method.InspectMethodType}} struct {
-	{{$iface.CallsHelperType}}[{{$method.CallType}}]
-}
-
-{{end}}{{/* ===== Configuration namespace ===== */}}
-type {{$iface.ConfigType}} struct{ m *{{$iface.MockName}} }
 
 // {{$iface.ConfigEntryName}} returns the configuration namespace — one method per
 // interface method, each returning the per-method config object.
 func (this *{{$iface.MockName}}) {{$iface.ConfigEntryName}}() {{$iface.ConfigType}} {
-	return {{$iface.ConfigType}}{m: this}
+	return {{$iface.ConfigType}}{this.group().MockOn(), this}
+}
+{{range $method := $iface.Methods}}
+type {{$method.ParamType}} struct{{if $method.ParamFields}} {
+{{range $method.ParamFields}}	{{.Name}} {{.Type}}
+{{end}}}{{else}}{}{{end}}
+
+type {{$method.ReturnType}} struct{{if $method.ReturnFields}} {
+{{range $method.ReturnFields}}	{{.Name}} {{.Type}}
+{{end}}}{{else}}{}{{end}}
+
+// {{$method.CallType}} records one call to {{$iface.Name}}.{{$method.Name}}.
+type {{$method.CallType}} struct {
+	Index       int
+	GlobalIndex int
+	Param       {{$method.ParamType}}
+	Return      {{$method.ReturnType}}
 }
 
-// Reset clears configured returns and installed handlers for every method
-// on the mock, without touching the call log.
-func (this {{$iface.ConfigType}}) Reset() {
+func (this {{$method.CallType}}) Global() int { return this.GlobalIndex }
+func (this {{$method.CallType}}) HappenedBefore(other {{$iface.CallInterfaceType}}) bool { return this.GlobalIndex < other.Global() }
+
+func {{$method.CallOfFunc}}(r mockrt.Rec) {{$method.CallType}} {
+	ret, _ := r.Return.({{$method.ReturnType}})
+	return {{$method.CallType}}{Index: r.Index, GlobalIndex: r.GlobalIndex, Param: r.Param.({{$method.ParamType}}), Return: ret}
+}
+
+func (this *{{$iface.MockName}}) {{$method.Name}}({{$method.Signature.Params}}){{$method.Signature.Returns}} {
+	{{if $method.ReturnFields}}__mockR, _ := {{end -}}
+	this.{{$method.StateField}}.Call(this.ref("{{$method.Name}}"), {{$method.ParamType}}{ {{- range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}{{$f.Name}}: {{index $method.Signature.ParamNames $i}}{{end}} })
+	{{- if $method.ReturnFields}}.({{$method.ReturnType}})
+	return {{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}__mockR.{{$rf.Name}}{{end}}
+{{- end}}
+}
+{{- $calls := "Calls"}}{{if $.Options.Async}}{{$calls = "AsyncCalls"}}{{end}}
+
+func (this {{$iface.InspectType}}) {{$method.Name}}() {{$method.InspectMethodType}} {
+	return {{$method.InspectMethodType}}{this.m.{{$method.StateField}}.{{$calls}}(this.m.ref("{{$method.Name}}"))}
+}
+
+type {{$method.InspectMethodType}} struct{ mockrt.{{$calls}} }
+
+func (this {{$method.InspectMethodType}}) At(i int) {{$method.CallType}} { return {{$method.CallOfFunc}}(this.{{$calls}}.At(i)) }
+func (this {{$method.InspectMethodType}}) Last() {{$method.CallType}} { return this.At(-1) }
+func (this {{$method.InspectMethodType}}) All() []{{$method.CallType}} { return mockrt.Map(this.{{$calls}}.All(), {{$method.CallOfFunc}}) }
+func (this {{$method.InspectMethodType}}) Any(pred func({{$method.CallType}}) bool) bool {
+	return this.{{$calls}}.Any(mockrt.Pred(pred, {{$method.CallOfFunc}}))
+}
+func (this {{$method.InspectMethodType}}) Filter(pred func({{$method.CallType}}) bool) []{{$method.CallType}} {
+	return mockrt.Map(this.{{$calls}}.Filter(mockrt.Pred(pred, {{$method.CallOfFunc}})), {{$method.CallOfFunc}})
+}
 {{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}{{range $method := $iface.Methods}}	this.m.{{$method.CfgField}} = {{$method.CfgType}}{}
-{{end}}}
-
-{{range $method := $iface.Methods}}func (this {{$iface.ConfigType}}) {{$method.Name}}() {{$method.ConfigMethodType}} {
-	return {{$method.ConfigMethodType}}{m: this.m}
+func (this {{$method.InspectMethodType}}) WaitForCall(pred func({{$method.CallType}}) bool, timeout time.Duration) error {
+	return this.AsyncCalls.WaitForCall(mockrt.Pred(pred, {{$method.CallOfFunc}}), timeout)
+}
+{{- end}}
+{{if $method.ReturnFields}}
+func (this {{$iface.ConfigType}}) {{$method.Name}}() {{$method.ConfigMethodType}} {
+	return {{$method.ConfigMethodType}}{this.m.{{$method.StateField}}.On(this.m.ref("{{$method.Name}}"))}
 }
 
-{{end}}{{/* ===== Per-method configuration types ===== */}}
-{{range $method := $iface.Methods}}type {{$method.ConfigMethodType}} struct{ m *{{$iface.MockName}} }
+type {{$method.ConfigMethodType}} struct{ mockrt.On }
 
-{{if $method.ReturnFields}}// {{$method.ReturnsSetterName}} sets all static return values for {{$method.Name}}
-// positionally. Used when no {{$method.CustomReturnSetterName}} handler is installed.
 func (this {{$method.ConfigMethodType}}) {{$method.ReturnsSetterName}}({{range $i, $rf := $method.CfgReturnFields}}{{if $i}}, {{end}}{{$rf.Name}} {{$rf.Type}}{{end}}) {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.alwaysStub != nil || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
-		panic("{{$iface.MockName}}.{{$method.Name}}: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.{{$method.CfgField}}.stickySet = true
-{{range $method.CfgReturnFields}}	this.m.{{$method.CfgField}}.sticky.{{.Name}} = {{.Name}}
-{{end}}}
-
-// Return returns the per-return setter namespace — one method per return
-// value of {{$method.Name}}, each overriding just that return without
-// touching the others.
-func (this {{$method.ConfigMethodType}}) Return() {{$method.PerReturnSetterType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.alwaysStub != nil || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
-		panic("{{$iface.MockName}}.{{$method.Name}}: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.{{$method.CfgField}}.stickySet = true
-	return {{$method.PerReturnSetterType}}{m: this.m, target: &this.m.{{$method.CfgField}}.sticky}
+	this.SetAll({{$method.ReturnType}}{ {{- range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}{{$rf.Name}}: {{(index $method.CfgReturnFields $i).Name}}{{end}} })
 }
-
-// {{$method.CustomReturnSetterName}} installs a dynamic function called instead of returning the
-// configured static values.
 func (this {{$method.ConfigMethodType}}) {{$method.CustomReturnSetterName}}(value {{$method.HandlerType}}) {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.alwaysStub != nil || len(this.m.{{$method.CfgField}}.stubQueue) > 0 {
-		panic("{{$iface.MockName}}.{{$method.Name}}: cannot set sticky return while Once()/Always() entries are armed; call .Reset() first")
-	}
-	this.m.{{$method.CfgField}}.handlerSet = true
-	this.m.{{$method.CfgField}}.{{$method.HandlerFieldName}} = value
+	this.Custom(value != nil, func(p any) any {
+{{- if eq (len $method.ReturnFields) 1}}
+		return {{$method.ReturnType}}{ {{- (index $method.ReturnFields 0).Name}}: value({{range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}p.({{$method.ParamType}}).{{$f.Name}}{{end}})}
+{{- else}}
+		var r {{$method.ReturnType}}
+		{{range $i, $rf := $method.ReturnFields}}{{if $i}}, {{end}}r.{{$rf.Name}}{{end}} = value({{range $i, $f := $method.ParamFields}}{{if $i}}, {{end}}p.({{$method.ParamType}}).{{$f.Name}}{{end}})
+		return r
+{{- end}}
+	})
+}
+func (this {{$method.ConfigMethodType}}) Return() {{$method.PerReturnSetterType}} { return {{$method.PerReturnSetterType}}{this.On.Return()} }
+func (this {{$method.ConfigMethodType}}) Once() {{$method.PerReturnSetterType}} { return {{$method.PerReturnSetterType}}{this.On.Once()} }
+func (this {{$method.ConfigMethodType}}) Always() {{$method.PerReturnSetterType}} { return {{$method.PerReturnSetterType}}{this.On.Always()} }
+func (this {{$method.ConfigMethodType}}) When(pred func({{$method.ParamType}}) bool) {{$method.ConfigMethodType}} {
+	return {{$method.ConfigMethodType}}{this.On.When(func(p any) bool { return pred(p.({{$method.ParamType}})) })}
 }
 
-// Once arms a single-call return; the stub is consumed by the next call
-// to {{$method.Name}} and then discarded.
-func (this {{$method.ConfigMethodType}}) Once() {{$method.PerReturnSetterType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.stickySet || this.m.{{$method.CfgField}}.handlerSet {
-		panic("{{$iface.MockName}}.{{$method.Name}}: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	__mockStub := &{{$method.StubType}}{}
-	this.m.{{$method.CfgField}}.stubQueue = append(this.m.{{$method.CfgField}}.stubQueue, __mockStub)
-	return {{$method.PerReturnSetterType}}{m: this.m, target: __mockStub}
-}
+type {{$method.PerReturnSetterType}} struct{ s mockrt.Stub }
 
-// Always arms a fallback return used when the Once() queue is exhausted.
-// Subsequent calls to Always() replace the previous fallback.
-func (this {{$method.ConfigMethodType}}) Always() {{$method.PerReturnSetterType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	if this.m.{{$method.CfgField}}.stickySet || this.m.{{$method.CfgField}}.handlerSet {
-		panic("{{$iface.MockName}}.{{$method.Name}}: cannot arm Once()/Always() while a sticky return is set; call .Reset() first")
-	}
-	this.m.{{$method.CfgField}}.alwaysStub = &{{$method.StubType}}{}
-	return {{$method.PerReturnSetterType}}{m: this.m, target: this.m.{{$method.CfgField}}.alwaysStub}
-}
-
-{{end}}{{if $method.ReturnFields}}// When registers a conditional stub set whose entries fire only when
-// the call's Param satisfies the predicate. Use Once()/Always() on the
-// returned namespace to attach armings.
-func (this {{$method.ConfigMethodType}}) When(pred func({{$method.ParamType}}) bool) {{$method.OnConditionalType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	this.m.{{$method.CfgField}}.conditionals = append(
-		this.m.{{$method.CfgField}}.conditionals,
-		&{{$method.ConditionalType}}{pred: pred},
-	)
-	return {{$method.OnConditionalType}}{m: this.m, condIndex: len(this.m.{{$method.CfgField}}.conditionals) - 1}
-}
-
-{{end}}// Reset clears configured returns and installed handler for {{$method.Name}}.
-func (this {{$method.ConfigMethodType}}) Reset() {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	this.m.{{$method.CfgField}} = {{$method.CfgType}}{}
-}
-
-{{if $method.ReturnFields}}// {{$method.PerReturnSetterType}} is the per-return setter namespace for
-// {{$method.Name}}. Each method overrides one return value without
-// touching the others. Methods return the setter itself for chaining.
-type {{$method.PerReturnSetterType}} struct {
-	m      *{{$iface.MockName}}
-	target *{{$method.StubType}}
-}
-
-// Return is a no-op that returns this setter, allowing Once().Return().X()
-// and Always().Return().X() chaining syntax.
-func (this {{$method.PerReturnSetterType}}) Return() {{$method.PerReturnSetterType}} {
-	return this
-}
-
-{{range $method.IndividualReturnSetters}}// {{.MethodName}} overrides just the {{.FieldName}} return value.
+func (this {{$method.PerReturnSetterType}}) Return() {{$method.PerReturnSetterType}} { return this }
+{{- range $method.IndividualReturnSetters}}
 func (this {{$method.PerReturnSetterType}}) {{.MethodName}}(value {{.ParamType}}) {{$method.PerReturnSetterType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	this.target.{{.FieldName}} = value
-	return this
+	return {{$method.PerReturnSetterType}}{mockrt.Set(this.s, func(r *{{$method.ReturnType}}) { r.{{.MethodName}} = value })}
 }
-
-{{end}}// {{$method.OnConditionalType}} is the conditional namespace returned by When(pred).
-// Exposes Once() (queue a single-shot stub) and Always() (install/replace
-// the fallback stub) — both scoped to the matching predicate.
-type {{$method.OnConditionalType}} struct {
-	m         *{{$iface.MockName}}
-	condIndex int
+{{- end}}
+{{else}}
+func (this {{$iface.ConfigType}}) {{$method.Name}}() mockrt.OnVoid {
+	return this.m.{{$method.StateField}}.OnVoid(this.m.ref("{{$method.Name}}"))
 }
-
-// Once arms a single-call return that fires only when this conditional's
-// predicate matches.
-func (this {{$method.OnConditionalType}}) Once() {{$method.PerReturnSetterType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	if this.condIndex >= len(this.m.{{$method.CfgField}}.conditionals) {
-		panic("{{$iface.MockName}}.{{$method.Name}}: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.{{$method.CfgField}}.conditionals[this.condIndex]
-	__mockStub := &{{$method.StubType}}{}
-	cond.stubQueue = append(cond.stubQueue, __mockStub)
-	return {{$method.PerReturnSetterType}}{m: this.m, target: __mockStub}
-}
-
-// Always arms a fallback return that fires on every call matching this
-// conditional's predicate, used when the conditional's Once() queue is
-// exhausted.
-func (this {{$method.OnConditionalType}}) Always() {{$method.PerReturnSetterType}} {
-{{- if $.Options.Async}}
-	this.m.mu.Lock()
-	defer this.m.mu.Unlock()
-{{end}}	if this.condIndex >= len(this.m.{{$method.CfgField}}.conditionals) {
-		panic("{{$iface.MockName}}.{{$method.Name}}: stale When() handle; conditionals were cleared (via Reset) after the When() call that produced this handle")
-	}
-	cond := this.m.{{$method.CfgField}}.conditionals[this.condIndex]
-	cond.alwaysStub = &{{$method.StubType}}{}
-	return {{$method.PerReturnSetterType}}{m: this.m, target: cond.alwaysStub}
-}
-
-{{end}}{{end}}{{/* end if ReturnFields / range $method */}}{{/* ===== callIndex helper (per mock) ===== */}}
-// callIndex resolves the index argument of Method_call(i)-style indexers:
-// negative i counts from the end; out-of-range i panics with a message
-// that surfaces both the original input and the log length.
-func (this *{{$iface.MockName}}) callIndex(length, i int) int {
-	resolved := i
-	if resolved < 0 {
-		resolved += length
-	}
-	if resolved < 0 || resolved >= length {
-		if i < 0 {
-			panic("{{$iface.MockName}} call index " + strconv.Itoa(i) + " (resolved to " + strconv.Itoa(resolved) + ") out of range, log has " + strconv.Itoa(length) + " entries")
-		}
-		panic("{{$iface.MockName}} call index " + strconv.Itoa(i) + " out of range, log has " + strconv.Itoa(length) + " entries")
-	}
-	return resolved
-}
-
-{{end}}
+{{end}}{{end}}{{/* end range $method */}}
+{{end}}{{/* end range $iface */}}

@@ -583,6 +583,40 @@ cond.Once().Return().Id("doomed").Err(nil)
 `, Options{}, `import stringsPkg "strings"`)
 	})
 
+	// The When() handle shares the per-method config type, so it also
+	// exposes the whole-method operations; they must not silently rewrite
+	// the unconditional config.
+	It("Whole-method operations on a When() handle panic", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) (id string, err error)
+}`, `
+m := &ServiceMock{}
+cond := m.On().Send().When(func(p ServiceMockSendParam) bool { return true })
+for name, op := range map[string]func(){
+	"ReturnAll()":    func() { cond.ReturnAll("x", nil) },
+	"ReturnCustom()": func() { cond.ReturnCustom(func(string) (string, error) { return "", nil }) },
+	"Return()":       func() { cond.Return() },
+	"When()":         func() { cond.When(func(ServiceMockSendParam) bool { return true }) },
+	"Reset()":        func() { cond.Reset() },
+} {
+	func() {
+		defer func() {
+			msg, _ := recover().(string)
+			if msg != "ServiceMock.Send: "+name+" is not available on a When() handle; arm it with Once() or Always()" {
+				t.Errorf("%s: panic = %q", name, msg)
+			}
+		}()
+		op()
+	}()
+}
+if got := m.Calls().Send().PendingStubs(); got != 0 {
+	t.Fatalf("PendingStubs() = %d, want 0", got)
+}
+`, Options{})
+	})
+
 	It("m.On().Reset() drains conditionals across all methods (config-wide reset)", func() {
 		runMockBehavior(`package svc
 
@@ -678,6 +712,33 @@ if count != 100 {
 	t.Fatalf("panicked goroutines = %d, want 100 (overlap is deterministic per call)", count)
 }
 `, Options{Async: true}, `import syncPkg "sync"`, `import timePkg "time"`, `import stringsPkg "strings"`)
+	})
+
+	It("--async: a panicking predicate releases the lock", func() {
+		runMockBehavior(`package svc
+
+type Service interface {
+	Send(email string) (id string, err error)
+}`, `
+m := &ServiceMock{}
+m.On().Send().When(func(p ServiceMockSendParam) bool { panic("boom") }).Always().Id("x")
+
+func() {
+	defer func() { recover() }()
+	m.Send("a")
+}()
+
+done := make(chan int)
+go func() { done <- m.Calls().Send().Count() }()
+select {
+case n := <-done:
+	if n != 1 {
+		t.Fatalf("Count() = %d, want 1", n)
+	}
+case <-timePkg.After(timePkg.Second):
+	t.Fatal("mock still locked after a predicate panicked")
+}
+`, Options{Async: true}, `import timePkg "time"`)
 	})
 
 	It("--async: predicate evaluation is race-clean with 100 concurrent calls", func() {
